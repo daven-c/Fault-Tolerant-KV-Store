@@ -2,6 +2,28 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <string>
+#include <vector>
+
+// --- Helper Functions ---
+
+// Parses a single argument from the string stream.
+// If the argument starts with a double quote, it reads until the matching closing quote.
+// Otherwise, it reads until the next whitespace character.
+std::string parse_argument(std::stringstream& ss) {
+    std::string arg;
+    ss >> std::ws; // Consume leading whitespace
+
+    if (ss.peek() == '"') {
+        ss.get(); // Consume the opening quote
+        std::getline(ss, arg, '"'); // Read everything until the closing quote
+    } else {
+        ss >> arg; // Read until the next whitespace
+    }
+    return arg;
+}
+
+// --- KeyValueStore Implementation ---
 
 KeyValueStore::KeyValueStore(const std::string& aof_path) : aof_path_(aof_path) {
     std::cout << "Initializing KeyValueStore with AOF: " << aof_path_ << std::endl;
@@ -11,33 +33,34 @@ KeyValueStore::KeyValueStore(const std::string& aof_path) : aof_path_(aof_path) 
 void KeyValueStore::load_from_aof() {
     std::ifstream aof_file(aof_path_);
     if (!aof_file.is_open()) {
-        std::cerr << "AOF file not found. Starting with an empty state." << std::endl;
+        std::cout << "AOF file not found. Starting with an empty state." << std::endl;
         return;
     }
-    
+
     std::cout << "Loading commands from " << aof_path_ << "..." << std::endl;
     std::string line;
     int commands_replayed = 0;
     while (std::getline(aof_file, line)) {
-        if (!line.empty()) {
-            // Apply command to in-memory store, but do not re-write to AOF.
-             std::lock_guard<std::mutex> lock(mutex_);
-            std::stringstream ss(line);
-            std::string command;
-            ss >> command;
-            if (command == "SET") {
-                std::string key, value;
-                ss >> key;
-                std::getline(ss, value);
-                if (!value.empty() && value[0] == ' ') value = value.substr(1);
+        if (line.empty()) continue;
+        
+        // Apply command to in-memory store, but do not re-write to AOF.
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::stringstream ss(line);
+        std::string command = parse_argument(ss);
+
+        if (command == "SET") {
+            std::string key = parse_argument(ss);
+            std::string value = parse_argument(ss);
+            if (!key.empty()) { // Value can be empty
                 store_[key] = value;
-            } else if (command == "DEL") {
-                std::string key;
-                ss >> key;
+            }
+        } else if (command == "DEL") {
+            std::string key = parse_argument(ss);
+            if (!key.empty()) {
                 store_.erase(key);
             }
-            commands_replayed++;
         }
+        commands_replayed++;
     }
     std::cout << "Replayed " << commands_replayed << " commands from AOF." << std::endl;
 }
@@ -46,45 +69,53 @@ std::string KeyValueStore::apply_command(const std::string& command) {
     std::lock_guard<std::mutex> lock(mutex_);
     
     std::stringstream ss(command);
-    std::string command_type, key, value;
-    ss >> command_type;
+    std::string command_type = parse_argument(ss);
 
     if (command_type == "SET") {
-        if (!(ss >> key)) { // Check if we can extract a key
-            return "ERROR: SET command requires a key.\n";
-        }
-        
-        std::getline(ss, value); // Read the rest of the line as the value
-        if (!value.empty() && value[0] == ' ') {
-             value = value.substr(1);
+        std::string key = parse_argument(ss);
+        std::string value;
+
+        // Special handling for value to capture everything remaining, even with spaces
+        ss >> std::ws;
+        if (ss.peek() == '"') {
+             ss.get(); // Consume quote
+             std::getline(ss, value, '"');
+        } else {
+             std::getline(ss, value);
         }
 
-        if (value.empty()) { // Check that a value was actually provided
-            return "ERROR: SET command requires a value.\n";
+        if (key.empty()) {
+            return "ERR wrong number of arguments for 'SET' command\n";
         }
         
-        // Persist to AOF only after validation
+        // Persist to AOF in a canonical, quoted format before applying to memory
+        std::string canonical_command = "SET \"" + key + "\" \"" + value + "\"";
         std::ofstream aof_file(aof_path_, std::ios::app);
-        aof_file << command << std::endl;
+        aof_file << canonical_command << std::endl;
 
         store_[key] = value;
         return "OK\n";
 
     } else if (command_type == "GET") {
-        ss >> key;
+        std::string key = parse_argument(ss);
+        if (key.empty()) {
+             return "ERR wrong number of arguments for 'GET' command\n";
+        }
         if (store_.count(key)) {
             return "\"" + store_.at(key) + "\"\n";
         } else {
             return "(nil)\n";
         }
     } else if (command_type == "DEL") {
-        if (!(ss >> key)) { // Check if we can extract a key
-            return "ERROR: DEL command requires a key.\n";
+        std::string key = parse_argument(ss);
+        if (key.empty()) {
+             return "ERR wrong number of arguments for 'DEL' command\n";
         }
 
-        // Persist to AOF before applying to memory
+        // Persist to AOF in a canonical, quoted format before applying to memory
+        std::string canonical_command = "DEL \"" + key + "\"";
         std::ofstream aof_file(aof_path_, std::ios::app);
-        aof_file << command << std::endl;
+        aof_file << canonical_command << std::endl;
 
         if (store_.erase(key)) {
             return "1\n";
@@ -93,7 +124,7 @@ std::string KeyValueStore::apply_command(const std::string& command) {
         }
     } else if (command_type == "KEYS") {
         if (store_.empty()) {
-            return "(empty list)\n";
+            return "(empty list or set)\n";
         }
         std::string result;
         int i = 1;
@@ -103,10 +134,6 @@ std::string KeyValueStore::apply_command(const std::string& command) {
         return result;
     }
     
-    if (command.empty() || command_type.empty()) {
-        return "ERROR: Empty command.\n";
-    }
-
-    return "Unknown command\n";
+    return "ERR unknown command '" + command_type + "'\n";
 }
 

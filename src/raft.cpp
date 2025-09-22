@@ -140,12 +140,13 @@ void RaftNode::send_append_entries(int peer_index) {
     size_t entries_to_send = log_.size() - next_index_[peer_index];
     for (size_t i = 0; i < entries_to_send; ++i) {
         const auto& entry = log_[next_index_[peer_index] + i];
-        rpc << " " << entry.term << " " << entry.command;
+        // We add a separator character (\x01) to properly handle commands with spaces.
+        rpc << " " << entry.term << " " << entry.command << "\x01";
     }
     rpc << "\n";
-    
-    auto rpc_message = rpc.str();
-    
+    const std::string rpc_message = rpc.str();
+
+    // Release the lock before the async network call
     boost::asio::post(io_context_, [this, self = shared_from_this(), peer_index, entries_to_send, rpc_message]() {
         send_rpc(peer_addresses_[peer_index], rpc_message, [this, self, peer_index, entries_to_send](const std::string& response) {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -249,26 +250,37 @@ std::string RaftNode::handle_rpc(const std::string& request) {
         if (term > current_term_) step_down(term);
         if (term < current_term_) return "Fail " + std::to_string(current_term_) + "\n";
         
-        if (current_leader_id_ != leader_id) {
-            std::cout << "[Node " << id_ << "] Acknowledging new leader: Node " << leader_id << "." << std::endl;
+        reset_election_timer();
+        if (state_ != RaftState::Follower) {
+           state_ = RaftState::Follower;
         }
         current_leader_id_ = leader_id;
-        reset_election_timer();
-        if (state_ == RaftState::Candidate) {
-            state_ = RaftState::Follower;
-             std::cout << "[Node " << id_ << "] Candidate stepping down to Follower state." << std::endl;
-        }
 
 
         if (log_.size() <= (size_t)prev_log_index || log_[prev_log_index].term != prev_log_term) {
             return "Fail " + std::to_string(current_term_) + "\n";
         }
 
+        // Correctly parse multiple log entries, even with spaces in commands.
         log_.erase(log_.begin() + prev_log_index + 1, log_.end());
 
-        int entry_term;
-        std::string entry_command;
-        while(ss >> entry_term >> entry_command) {
+        std::string entries_payload;
+        // Read the rest of the line, which contains the log entries.
+        std::getline(ss, entries_payload);
+
+        std::stringstream entries_ss(entries_payload);
+        std::string single_entry_str;
+        // Split entries by our separator character.
+        while (std::getline(entries_ss, single_entry_str, '\x01')) {
+            if (single_entry_str.empty() || single_entry_str.find_first_not_of(' ') == std::string::npos) {
+                continue;
+            }
+            std::stringstream entry_ss(single_entry_str);
+            int entry_term;
+            entry_ss >> entry_term;
+            entry_ss >> std::ws; // skip whitespace
+            std::string entry_command;
+            std::getline(entry_ss, entry_command);
             log_.push_back({entry_term, entry_command});
         }
         
