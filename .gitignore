@@ -36,6 +36,14 @@
 *.exe
 *.out
 *.app
+server
+console
 
 # debug information files
 *.dwo
+
+# Build artifacts
+build/
+
+# Other
+.DS_Store
