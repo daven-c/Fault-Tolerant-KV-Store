@@ -79,8 +79,18 @@ std::string KeyValueStore::apply_command(const std::string& command) {
         } else {
             return "0\n";
         }
+    } else if (command_type == "KEYS") {
+        // This is a read-only command, so we don't write it to the AOF.
+        std::stringstream result;
+        int i = 0;
+        for (const auto& pair : store_) {
+            result << ++i << ") \"" << pair.first << "\"\n";
+        }
+        if (store_.empty()) {
+            return "(empty list or set)\n";
+        }
+        return result.str();
     }
     
     return "Unknown command\n";
 }
-
