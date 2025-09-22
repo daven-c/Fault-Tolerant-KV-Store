@@ -41,7 +41,7 @@ echo "Starting $NUM_SERVERS servers..."
 # --- Launch each server instance in the background ---
 for (( i=0; i<$NUM_SERVERS; i++ )); do
     SERVER_ID=$i
-    LOG_FILE="server_$SERVER_ID.log"
+    LOG_FILE="server_logs/node_$SERVER_ID.log"
     
     echo " -> Launching Server $SERVER_ID on port $((START_PORT + i)). Log: $LOG_FILE"
     

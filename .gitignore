@@ -47,4 +47,4 @@ build/
 
 # Other
 .DS_Store
-*.log
+server_logs/*
