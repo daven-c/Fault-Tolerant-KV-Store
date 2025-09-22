@@ -7,6 +7,7 @@
 #   start-bg [num_servers]  - Launches a new cluster with nodes running as background processes.
 #   stop                    - Stops all running server processes.
 #   restart <id> <total>    - Restarts a specific server within a cluster of <total> nodes.
+#   reset                   - Removes all logs and AOF files.
 
 # --- Configuration ---
 DEFAULT_SERVERS=3
@@ -141,6 +142,15 @@ case "$COMMAND" in
         # Restart always launches in a new terminal for monitoring purposes.
         launch_node $SERVER_ID "$PEERS" false
         echo "Server $SERVER_ID relaunched."
+        ;;
+
+    "reset")
+        echo "Removing all logs and AOF files..."
+        pkill -f "$EXECUTABLE"
+        sleep 1
+        rm -rf $LOG_DIR
+        rm -rf AOFs
+        echo "All logs and AOF files removed."
         ;;
 
     *)

@@ -166,6 +166,14 @@ You can stop the cluster by running the following:
 ./launch.sh stop
 ```
 
+#### 5. Resetting Logs
+
+You can remove all logs from AOFs/ and server_logs/ by running:
+
+```bash
+./launch.sh reset
+```
+
 ---
 
 ## 🐛 Troubleshooting
