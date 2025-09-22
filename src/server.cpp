@@ -2,6 +2,7 @@
 #include "raft.h"
 #include "thread_pool.h"
 #include <boost/asio.hpp>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -38,8 +39,7 @@ private:
                     
                     if (first_word == "RequestVote" || first_word == "AppendEntries") {
                         std::string response = raft_node_->handle_rpc(line + "\n");
-                        // FIX: Keep the connection alive for RPCs for efficiency.
-                        do_write(response, true); 
+                        do_write(response, false); 
                     } else {
                         // The callback ensures the reply is only sent after the command is committed.
                         raft_node_->submit_command(line, [this, self](const std::string& response){
@@ -110,7 +110,11 @@ int main(int argc, char* argv[]) {
         const short port = std::stoi(my_address.substr(colon_pos + 1));
 
         boost::asio::io_context io_context;
-        KeyValueStore kv_store("kv_store_" + std::to_string(my_id) + ".aof");
+        
+        // Create the AOFs directory if it doesn't exist
+        std::filesystem::create_directory("AOFs");
+
+        KeyValueStore kv_store("AOFs/kv_store_" + std::to_string(my_id) + ".aof");
         auto raft_node = std::make_shared<RaftNode>(my_id, peer_addresses, kv_store, io_context);
         
         Server server(io_context, port, raft_node);
@@ -130,3 +134,4 @@ int main(int argc, char* argv[]) {
     }
     return 0;
 }
+

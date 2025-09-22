@@ -15,6 +15,8 @@ void KeyValueStore::load_from_aof() {
         return;
     }
 
+    std::cout << "Loading commands from " << aof_path_ << "..." << std::endl;
+
     std::string line;
     int commands_replayed = 0;
     while (std::getline(aof_file, line)) {
@@ -94,3 +96,4 @@ std::string KeyValueStore::apply_command(const std::string& command) {
     
     return "Unknown command\n";
 }
+
