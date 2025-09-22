@@ -38,7 +38,8 @@ private:
                     
                     if (first_word == "RequestVote" || first_word == "AppendEntries") {
                         std::string response = raft_node_->handle_rpc(line + "\n");
-                        do_write(response, false); 
+                        // FIX: Keep the connection alive for RPCs for efficiency.
+                        do_write(response, true); 
                     } else {
                         // The callback ensures the reply is only sent after the command is committed.
                         raft_node_->submit_command(line, [this, self](const std::string& response){
@@ -129,4 +130,3 @@ int main(int argc, char* argv[]) {
     }
     return 0;
 }
-

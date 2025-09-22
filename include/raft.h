@@ -41,6 +41,7 @@ private:
     int id_;
     int current_term_{0};
     int voted_for_{-1};
+    int current_leader_id_{-1};
     std::vector<LogEntry> log_;
     RaftState state_{RaftState::Follower};
 
@@ -62,3 +63,4 @@ private:
 };
 
 #endif // RAFT_H
+

@@ -53,6 +53,7 @@ void RaftNode::start_election() {
     current_term_++;
     voted_for_ = id_;
     votes_received_ = 1;
+    current_leader_id_ = -1;
 
     std::cout << "[Node " << id_ << "] Timed out, starting election for term " << current_term_ << "." << std::endl;
 
@@ -66,7 +67,6 @@ void RaftNode::start_election() {
             std::lock_guard<std::mutex> lock(mutex_);
             if (state_ != RaftState::Candidate) return;
 
-            // FIX: Check for RPC failure before parsing.
             if (res == "RPC_FAILED\n") return;
 
             std::stringstream ss(res);
@@ -95,17 +95,16 @@ void RaftNode::become_leader() {
     if (state_ != RaftState::Candidate) return;
 
     state_ = RaftState::Leader;
+    current_leader_id_ = id_;
     std::cout << "[Node " << id_ << "] Became LEADER for term " << current_term_ << "!" << std::endl;
     election_timer_.cancel();
 
     next_index_.assign(peer_addresses_.size(), log_.size());
     match_index_.assign(peer_addresses_.size(), 0);
 
-    // FIX: Start a single, centralized heartbeat timer.
     broadcast_append_entries();
 }
 
-// FIX: New function to manage the single heartbeat timer.
 void RaftNode::broadcast_append_entries() {
     // This function is called WITH THE MUTEX HELD.
     if (state_ != RaftState::Leader) return;
@@ -147,13 +146,11 @@ void RaftNode::send_append_entries(int peer_index) {
     
     auto rpc_message = rpc.str();
     
-    // Asynchronously send the RPC without holding the lock during I/O
     boost::asio::post(io_context_, [this, self = shared_from_this(), peer_index, entries_to_send, rpc_message]() {
         send_rpc(peer_addresses_[peer_index], rpc_message, [this, self, peer_index, entries_to_send](const std::string& response) {
             std::lock_guard<std::mutex> lock(mutex_);
             if (state_ != RaftState::Leader) return;
 
-            // FIX: Check for RPC failure before parsing.
             if (response == "RPC_FAILED\n") return;
 
             std::stringstream ss(response);
@@ -196,7 +193,6 @@ void RaftNode::advance_commit_index() {
         }
     }
 
-    // FIX: Apply newly committed entries to the state machine and respond to clients.
     if (commit_index_ > old_commit_index) {
         while (last_applied_ < commit_index_) {
             last_applied_++;
@@ -219,6 +215,7 @@ void RaftNode::step_down(int new_term) {
     state_ = RaftState::Follower;
     current_term_ = new_term;
     voted_for_ = -1;
+    current_leader_id_ = -1;
     heartbeat_timer_.cancel();
     reset_election_timer();
 }
@@ -252,8 +249,15 @@ std::string RaftNode::handle_rpc(const std::string& request) {
         if (term > current_term_) step_down(term);
         if (term < current_term_) return "Fail " + std::to_string(current_term_) + "\n";
         
+        if (current_leader_id_ != leader_id) {
+            std::cout << "[Node " << id_ << "] Acknowledging new leader: Node " << leader_id << "." << std::endl;
+        }
+        current_leader_id_ = leader_id;
         reset_election_timer();
-        if (state_ == RaftState::Candidate) state_ = RaftState::Follower;
+        if (state_ == RaftState::Candidate) {
+            state_ = RaftState::Follower;
+             std::cout << "[Node " << id_ << "] Candidate stepping down to Follower state." << std::endl;
+        }
 
 
         if (log_.size() <= (size_t)prev_log_index || log_[prev_log_index].term != prev_log_term) {
@@ -285,7 +289,13 @@ std::string RaftNode::handle_rpc(const std::string& request) {
 void RaftNode::submit_command(const std::string& command, std::function<void(const std::string&)> callback) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (state_ != RaftState::Leader) {
-        boost::asio::post(io_context_, [callback]() { callback("NOT_LEADER\n"); });
+        std::string response = "NOT_LEADER";
+        if (current_leader_id_ != -1 && current_leader_id_ < (int)peer_addresses_.size()) {
+            response += " " + peer_addresses_[current_leader_id_];
+        }
+        response += "\n";
+
+        boost::asio::post(io_context_, [callback, response]() { callback(response); });
         return;
     }
 
@@ -324,3 +334,4 @@ void RaftNode::send_rpc(const std::string& peer_address, const std::string& rpc_
         }
     }, boost::asio::detached);
 }
+
