@@ -14,9 +14,8 @@ void KeyValueStore::load_from_aof() {
         std::cerr << "AOF file not found. Starting with an empty state." << std::endl;
         return;
     }
-
+    
     std::cout << "Loading commands from " << aof_path_ << "..." << std::endl;
-
     std::string line;
     int commands_replayed = 0;
     while (std::getline(aof_file, line)) {
@@ -51,11 +50,20 @@ std::string KeyValueStore::apply_command(const std::string& command) {
     ss >> command_type;
 
     if (command_type == "SET") {
-        ss >> key;
-        std::getline(ss, value);
-        if (!value.empty() && value[0] == ' ') value = value.substr(1);
+        if (!(ss >> key)) { // Check if we can extract a key
+            return "ERROR: SET command requires a key.\n";
+        }
         
-        // Persist to AOF before applying to memory
+        std::getline(ss, value); // Read the rest of the line as the value
+        if (!value.empty() && value[0] == ' ') {
+             value = value.substr(1);
+        }
+
+        if (value.empty()) { // Check that a value was actually provided
+            return "ERROR: SET command requires a value.\n";
+        }
+        
+        // Persist to AOF only after validation
         std::ofstream aof_file(aof_path_, std::ios::app);
         aof_file << command << std::endl;
 
@@ -70,7 +78,9 @@ std::string KeyValueStore::apply_command(const std::string& command) {
             return "(nil)\n";
         }
     } else if (command_type == "DEL") {
-        ss >> key;
+        if (!(ss >> key)) { // Check if we can extract a key
+            return "ERROR: DEL command requires a key.\n";
+        }
 
         // Persist to AOF before applying to memory
         std::ofstream aof_file(aof_path_, std::ios::app);
@@ -82,18 +92,21 @@ std::string KeyValueStore::apply_command(const std::string& command) {
             return "0\n";
         }
     } else if (command_type == "KEYS") {
-        // This is a read-only command, so we don't write it to the AOF.
-        std::stringstream result;
-        int i = 0;
-        for (const auto& pair : store_) {
-            result << ++i << ") \"" << pair.first << "\"\n";
-        }
         if (store_.empty()) {
-            return "(empty list or set)\n";
+            return "(empty list)\n";
         }
-        return result.str();
+        std::string result;
+        int i = 1;
+        for (const auto& pair : store_) {
+            result += std::to_string(i++) + ") \"" + pair.first + "\"\n";
+        }
+        return result;
     }
     
+    if (command.empty() || command_type.empty()) {
+        return "ERROR: Empty command.\n";
+    }
+
     return "Unknown command\n";
 }
 

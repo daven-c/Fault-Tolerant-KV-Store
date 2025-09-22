@@ -47,4 +47,5 @@ build/
 
 # Other
 .DS_Store
-server_logs/*
+*.log
+*.aof

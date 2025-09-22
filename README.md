@@ -94,13 +94,13 @@ chmod +x launch.sh
 To launch a default **3-node cluster**:
 
 ```bash
-./launch.sh
+./launch.sh start 3
 ```
 
 To launch a cluster with a specific number of nodes (e.g., 5):
 
 ```bash
-./launch.sh 5
+./launch.sh start [num]
 ```
 
 #### (Optional). Manually launch the Cluster
@@ -127,6 +127,8 @@ General Command:
 
 After a few seconds, an election will occur, and one node will become the Leader. The other nodes will become Followers and print messages indicating who the Leader is.
 
+Logs for all nodes will be stored in server_logs/ by default
+
 #### 3. Interacting with the Cluster
 
 You can connect to any node in the cluster with a tool like `netcat` to send commands.
@@ -140,6 +142,22 @@ nc 127.0.0.1 8000
 SET name Test
 GET name
 KEYS
+```
+
+You can also restart any node in the cluster with:
+
+```bash
+./launch.sh restart <id> <total>
+```
+
+_id_ is the id of the node (e.g. 1, 2, 3) and _total_ is the total nodes in the cluster
+
+#### 4. Stopping the Cluster
+
+You can stop the cluster by running the following:
+
+```bash
+./launch.sh stop
 ```
 
 ---
