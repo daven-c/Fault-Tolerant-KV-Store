@@ -114,7 +114,7 @@ int main(int argc, char* argv[]) {
         // Create the AOFs directory if it doesn't exist
         std::filesystem::create_directory("AOFs");
 
-        KeyValueStore kv_store("AOFs/kv_store_" + std::to_string(my_id) + ".aof");
+        KeyValueStore kv_store("AOFs/node_" + std::to_string(my_id) + ".aof");
         auto raft_node = std::make_shared<RaftNode>(my_id, peer_addresses, kv_store, io_context);
         
         Server server(io_context, port, raft_node);
