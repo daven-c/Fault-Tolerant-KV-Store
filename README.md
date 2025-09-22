@@ -106,7 +106,7 @@ To launch a cluster with a specific number of nodes (e.g., 5):
 To launch a cluster in the background:
 
 ```bash
-./launch.sh start -bg [num]
+./launch.sh start-bg [num]
 ```
 
 #### (Optional). Manually launch the Cluster
