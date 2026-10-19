@@ -47,6 +47,8 @@ private:
     void persist_applied();
     void append_state(const std::string& records, bool durable);
 
+    std::shared_ptr<boost::asio::ip::tcp::socket> take_idle_connection(const std::string& peer_address);
+    void return_idle_connection(const std::string& peer_address, std::shared_ptr<boost::asio::ip::tcp::socket> socket);
     void send_rpc(const std::string& peer_address, const std::string& rpc_message, std::function<void(const std::string&)> callback);
 
     int id_;
@@ -75,6 +77,11 @@ private:
     boost::asio::steady_timer election_timer_;
     boost::asio::steady_timer heartbeat_timer_;
     std::mutex mutex_;
+
+    // Idle RPC connections per peer, reused instead of reconnecting for every RPC.
+    static constexpr size_t kMaxIdleConnectionsPerPeer = 4;
+    std::map<std::string, std::vector<std::shared_ptr<boost::asio::ip::tcp::socket>>> idle_connections_;
+    std::mutex connections_mutex_;
 };
 
 #endif // RAFT_H

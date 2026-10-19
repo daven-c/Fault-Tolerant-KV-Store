@@ -466,32 +466,58 @@ void RaftNode::submit_command(const std::string& command, std::function<void(con
     std::cout << "[Node " << id_ << "] Leader received command: '" << command << "'. Appending at index " << new_log_index << "." << std::endl;
 }
 
+std::shared_ptr<tcp::socket> RaftNode::take_idle_connection(const std::string& peer_address) {
+    std::lock_guard<std::mutex> lock(connections_mutex_);
+    auto& idle = idle_connections_[peer_address];
+    if (idle.empty()) return nullptr;
+    auto socket = idle.back();
+    idle.pop_back();
+    return socket;
+}
+
+void RaftNode::return_idle_connection(const std::string& peer_address, std::shared_ptr<tcp::socket> socket) {
+    std::lock_guard<std::mutex> lock(connections_mutex_);
+    auto& idle = idle_connections_[peer_address];
+    if (idle.size() < kMaxIdleConnectionsPerPeer) idle.push_back(std::move(socket));
+}
+
 void RaftNode::send_rpc(const std::string& peer_address, const std::string& rpc_message, std::function<void(const std::string&)> callback) {
     auto self = shared_from_this();
     boost::asio::co_spawn(io_context_, [this, self, peer_address, rpc_message, callback]() -> boost::asio::awaitable<void> {
-        try {
-            tcp::resolver resolver(io_context_);
-            size_t colon_pos = peer_address.find(':');
-            std::string host = peer_address.substr(0, colon_pos);
-            std::string port = peer_address.substr(colon_pos + 1);
+        // Reuse an idle connection to the peer when there is one. If a reused connection turns out
+        // to be dead (e.g. the peer restarted), retry once on a fresh one; Raft RPCs are idempotent.
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            std::shared_ptr<tcp::socket> socket = take_idle_connection(peer_address);
+            const bool reused = socket != nullptr;
+            try {
+                if (!reused) {
+                    tcp::resolver resolver(io_context_);
+                    size_t colon_pos = peer_address.find(':');
+                    std::string host = peer_address.substr(0, colon_pos);
+                    std::string port = peer_address.substr(colon_pos + 1);
 
-            auto endpoints = co_await resolver.async_resolve(host, port, boost::asio::use_awaitable);
-            tcp::socket socket(io_context_);
-            co_await boost::asio::async_connect(socket, endpoints, boost::asio::use_awaitable);
-            co_await boost::asio::async_write(socket, boost::asio::buffer(rpc_message), boost::asio::use_awaitable);
-            
-            boost::asio::streambuf response_buffer;
-            co_await boost::asio::async_read_until(socket, response_buffer, "\n", boost::asio::use_awaitable);
-            
-            std::istream is(&response_buffer);
-            std::string response;
-            std::getline(is, response);
-            response += "\n";
-            
-            boost::asio::post(io_context_, [callback, response](){ callback(response); });
-        } catch (std::exception& e) {
-            boost::asio::post(io_context_, [callback](){ callback("RPC_FAILED\n"); });
+                    auto endpoints = co_await resolver.async_resolve(host, port, boost::asio::use_awaitable);
+                    socket = std::make_shared<tcp::socket>(io_context_);
+                    co_await boost::asio::async_connect(*socket, endpoints, boost::asio::use_awaitable);
+                    socket->set_option(tcp::no_delay(true));
+                }
+                co_await boost::asio::async_write(*socket, boost::asio::buffer(rpc_message), boost::asio::use_awaitable);
+
+                boost::asio::streambuf response_buffer;
+                co_await boost::asio::async_read_until(*socket, response_buffer, "\n", boost::asio::use_awaitable);
+
+                std::istream is(&response_buffer);
+                std::string response;
+                std::getline(is, response);
+                response += "\n";
+
+                return_idle_connection(peer_address, socket);
+                boost::asio::post(io_context_, [callback, response](){ callback(response); });
+                co_return;
+            } catch (std::exception& e) {
+                if (!reused) break;
+            }
         }
+        boost::asio::post(io_context_, [callback](){ callback("RPC_FAILED\n"); });
     }, boost::asio::detached);
 }
-
