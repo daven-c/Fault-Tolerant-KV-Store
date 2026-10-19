@@ -1,4 +1,5 @@
 #include "raft.h"
+#include <algorithm>
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
 #include <boost/asio/post.hpp>
@@ -101,6 +102,8 @@ void RaftNode::become_leader() {
 
     next_index_.assign(peer_addresses_.size(), log_.size());
     match_index_.assign(peer_addresses_.size(), 0);
+    append_in_flight_.assign(peer_addresses_.size(), false);
+    append_sent_at_.assign(peer_addresses_.size(), std::chrono::steady_clock::time_point{});
 
     broadcast_append_entries();
 }
@@ -111,7 +114,7 @@ void RaftNode::broadcast_append_entries() {
 
     for (size_t i = 0; i < peer_addresses_.size(); ++i) {
         if (i != (size_t)id_) {
-            send_append_entries(i);
+            replicate_to(i);
         }
     }
 
@@ -126,6 +129,17 @@ void RaftNode::broadcast_append_entries() {
     });
 }
 
+void RaftNode::replicate_to(int peer_index) {
+    // This function is called WITH THE MUTEX HELD.
+    // Keep at most one AppendEntries in flight per follower: entries that arrive meanwhile are
+    // batched into the next RPC, sent as soon as the response comes back. A request that has
+    // been outstanding too long is presumed lost and superseded.
+    if (append_in_flight_[peer_index] &&
+        std::chrono::steady_clock::now() - append_sent_at_[peer_index] < std::chrono::milliseconds(300)) {
+        return;
+    }
+    send_append_entries(peer_index);
+}
 
 void RaftNode::send_append_entries(int peer_index) {
     // This function is called WITH THE MUTEX HELD.
@@ -145,14 +159,19 @@ void RaftNode::send_append_entries(int peer_index) {
     }
     rpc << "\n";
     const std::string rpc_message = rpc.str();
+    const int sent_term = current_term_;
+    append_in_flight_[peer_index] = true;
+    append_sent_at_[peer_index] = std::chrono::steady_clock::now();
 
     // Release the lock before the async network call
-    boost::asio::post(io_context_, [this, self = shared_from_this(), peer_index, prev_log_index, entries_to_send, rpc_message]() {
-        send_rpc(peer_addresses_[peer_index], rpc_message, [this, self, peer_index, prev_log_index, entries_to_send](const std::string& response) {
+    boost::asio::post(io_context_, [this, self = shared_from_this(), peer_index, prev_log_index, entries_to_send, sent_term, rpc_message]() {
+        send_rpc(peer_addresses_[peer_index], rpc_message, [this, self, peer_index, prev_log_index, entries_to_send, sent_term](const std::string& response) {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (state_ != RaftState::Leader) return;
+            // Ignore responses that belong to an earlier leadership term.
+            if (state_ != RaftState::Leader || current_term_ != sent_term) return;
+            append_in_flight_[peer_index] = false;
 
-            if (response == "RPC_FAILED\n") return;
+            if (response == "RPC_FAILED\n") return; // the heartbeat will retry
 
             std::stringstream ss(response);
             std::string result;
@@ -171,8 +190,16 @@ void RaftNode::send_append_entries(int peer_index) {
                 match_index_[peer_index] = std::max(match_index_[peer_index], replicated_up_to);
                 next_index_[peer_index] = match_index_[peer_index] + 1;
                 advance_commit_index();
+                if (next_index_[peer_index] < (int)log_.size()) {
+                    send_append_entries(peer_index);
+                }
             } else {
-                next_index_[peer_index] = std::max(1, next_index_[peer_index] - 1);
+                // The follower reports where its log diverges, so jump there in one step instead
+                // of backing off one entry per heartbeat, and retry immediately.
+                int conflict_index = next_index_[peer_index] - 1;
+                ss >> conflict_index;
+                next_index_[peer_index] = std::clamp(conflict_index, 1, std::max(1, next_index_[peer_index] - 1));
+                send_append_entries(peer_index);
             }
         });
     });
@@ -260,8 +287,16 @@ std::string RaftNode::handle_rpc(const std::string& request) {
         current_leader_id_ = leader_id;
 
 
-        if (log_.size() <= (size_t)prev_log_index || log_[prev_log_index].term != prev_log_term) {
-            return "Fail " + std::to_string(current_term_) + "\n";
+        if (log_.size() <= (size_t)prev_log_index) {
+            // Log too short: the leader should resume right after our last entry.
+            return "Fail " + std::to_string(current_term_) + " " + std::to_string(log_.size()) + "\n";
+        }
+        if (log_[prev_log_index].term != prev_log_term) {
+            // Term conflict: skip back past every entry of the conflicting term at once.
+            int conflict_term = log_[prev_log_index].term;
+            int conflict_index = prev_log_index;
+            while (conflict_index > 1 && log_[conflict_index - 1].term == conflict_term) --conflict_index;
+            return "Fail " + std::to_string(current_term_) + " " + std::to_string(conflict_index) + "\n";
         }
 
         // Correctly parse multiple log entries, even with spaces in commands.
@@ -317,6 +352,14 @@ void RaftNode::submit_command(const std::string& command, std::function<void(con
     log_.push_back({current_term_, command});
     int new_log_index = log_.size() - 1;
     client_callbacks_[new_log_index] = callback;
+
+    // Replicate now rather than waiting for the next heartbeat.
+    for (size_t i = 0; i < peer_addresses_.size(); ++i) {
+        if (i != (size_t)id_) {
+            replicate_to(i);
+        }
+    }
+    if (peer_addresses_.size() == 1) advance_commit_index();
 
     std::cout << "[Node " << id_ << "] Leader received command: '" << command << "'. Appending at index " << new_log_index << "." << std::endl;
 }

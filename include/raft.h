@@ -33,6 +33,7 @@ private:
     void start_election();
     void become_leader();
     void broadcast_append_entries();
+    void replicate_to(int peer_index);
     void send_append_entries(int peer_index);
     void advance_commit_index();
     void step_down(int new_term);
@@ -50,6 +51,8 @@ private:
 
     std::vector<int> next_index_;
     std::vector<int> match_index_;
+    std::vector<bool> append_in_flight_;
+    std::vector<std::chrono::steady_clock::time_point> append_sent_at_;
     int votes_received_{0};
     
     std::map<int, std::function<void(const std::string&)>> client_callbacks_;
