@@ -297,4 +297,69 @@ async def quorum(env: Env) -> dict:
             "quorum_restore_ms": round(restore_ms, 1) if restored else None}
 
 
-SCENARIOS = {"election": election, "throughput": throughput, "failover": failover, "quorum": quorum}
+# --------------------------------------------------------------------------------------------
+# Raft RPC: drive one real node directly over its RPC port, acting as a fake leader/candidate,
+# to check protocol rules that are hard to hit by chance in a live cluster.
+# --------------------------------------------------------------------------------------------
+
+FAKE_TERM = 1000  # far above any term the lone node reaches by timing out on its own
+
+
+async def _rpc(addr: str, line: str) -> str:
+    host, port = addr.split(":")
+    reader, writer = await asyncio.wait_for(asyncio.open_connection(host, int(port)), 1.0)
+    try:
+        writer.write(line.encode() + b"\n")
+        await writer.drain()
+        return (await asyncio.wait_for(reader.readline(), 1.0)).decode().strip()
+    finally:
+        writer.close()
+
+
+def _append(prev_index: int, prev_term: int, commit: int, entries: list[tuple[int, str]],
+            term: int = FAKE_TERM) -> str:
+    payload = "".join(f" {t} {cmd}\x01" for t, cmd in entries)
+    return f"AppendEntries {term} 1 {prev_index} {prev_term} {commit}{payload}"
+
+
+async def raft_rpc(env: Env) -> dict:
+    # Peers 1 and 2 are never started: the harness plays their part.
+    cluster = env.cluster("raft-rpc")
+    cluster.workdir.mkdir(parents=True, exist_ok=True)
+    try:
+        cluster.start_node(0)
+        node = cluster.addrs[0]
+
+        # A stale, shorter AppendEntries delivered after a longer one must not drop entries.
+        await _rpc(node, _append(0, 0, 0, [(FAKE_TERM, "SET a 1"), (FAKE_TERM, "SET b 2")]))
+        await _rpc(node, _append(0, 0, 0, [(FAKE_TERM, "SET a 1")]))
+        kept = (await _rpc(node, _append(2, FAKE_TERM, 2, []))).startswith("Success")
+        applied = await _wait_until(lambda: cluster.aof_state(0) == {"a": "1", "b": "2"}, timeout=2.0) is not None
+
+        # A new leader must still overwrite an uncommitted entry from an older term.
+        T = FAKE_TERM
+        await _rpc(node, _append(2, T, 2, [(T, "SET c old")]))
+        reply = await _rpc(node, _append(2, T, 3, [(T + 1, "SET c new")], term=T + 1))
+        replaced = reply.startswith("Success") and await _wait_until(
+            lambda: cluster.aof_state(0).get("c") == "new", timeout=2.0) is not None
+
+        # One vote per term, even across a crash and restart.
+        vote_term = FAKE_TERM + 10
+        first = await _rpc(node, f"RequestVote {vote_term} 1 100 {FAKE_TERM}")
+        cluster.kill_node(0)
+        cluster.start_node(0)
+        second = await _rpc(cluster.addrs[0], f"RequestVote {vote_term} 2 100 {FAKE_TERM}")
+    finally:
+        cluster.stop()
+
+    return {
+        "stale_append_keeps_entries": kept and applied,
+        "conflicting_entry_replaced": replaced,
+        "first_vote_granted": first.startswith("VoteGranted"),
+        "second_vote_after_restart_denied": second.startswith("VoteDenied"),
+        "replies": {"first_vote": first, "second_vote": second},
+    }
+
+
+SCENARIOS = {"election": election, "throughput": throughput, "failover": failover, "quorum": quorum,
+             "raft_rpc": raft_rpc}

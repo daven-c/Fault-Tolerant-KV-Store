@@ -84,6 +84,13 @@ def checks(result: dict) -> list[dict]:
         "majority killed, leader left alone")
     add("Liveness restored when quorum returns", "quorum", q.get("quorum_restored_write_ok"),
         f"{q.get('quorum_restore_ms')} ms")
+    r = s.get("raft_rpc", {})
+    add("Stale AppendEntries never truncates the log", "raft_rpc",
+        r.get("stale_append_keeps_entries") and r.get("conflicting_entry_replaced"),
+        "shorter RPC delivered after a longer one; conflicting suffix still replaced")
+    add("At most one vote per term across restarts", "raft_rpc",
+        r.get("first_vote_granted") and r.get("second_vote_after_restart_denied"),
+        f"after restart: {r.get('replies', {}).get('second_vote')}")
     return out
 
 

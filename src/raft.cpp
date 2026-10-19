@@ -300,8 +300,7 @@ std::string RaftNode::handle_rpc(const std::string& request) {
         }
 
         // Correctly parse multiple log entries, even with spaces in commands.
-        log_.erase(log_.begin() + prev_log_index + 1, log_.end());
-
+        std::vector<LogEntry> entries;
         std::string entries_payload;
         // Read the rest of the line, which contains the log entries.
         std::getline(ss, entries_payload);
@@ -319,11 +318,25 @@ std::string RaftNode::handle_rpc(const std::string& request) {
             entry_ss >> std::ws; // skip whitespace
             std::string entry_command;
             std::getline(entry_ss, entry_command);
-            log_.push_back({entry_term, entry_command});
+            entries.push_back({entry_term, entry_command});
         }
-        
+
+        // Truncate only at the first entry that conflicts with the leader's (same index, different
+        // term). Entries we already hold are kept, so a stale, shorter AppendEntries arriving out
+        // of order can never remove entries the leader has counted as replicated.
+        for (size_t i = 0; i < entries.size(); ++i) {
+            size_t index = prev_log_index + 1 + i;
+            if (index < log_.size()) {
+                if (log_[index].term == entries[i].term) continue;
+                log_.erase(log_.begin() + index, log_.end());
+            }
+            log_.push_back(entries[i]);
+        }
+
+        // Only entries confirmed by this RPC may be committed; anything beyond may be stale.
+        int last_new_index = prev_log_index + (int)entries.size();
         if (leader_commit > commit_index_) {
-            commit_index_ = std::min(leader_commit, (int)log_.size() - 1);
+            commit_index_ = std::max(commit_index_, std::min(leader_commit, last_new_index));
         }
 
         while (last_applied_ < commit_index_) {
