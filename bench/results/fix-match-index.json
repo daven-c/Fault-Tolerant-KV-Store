@@ -1,0 +1,304 @@
+{
+  "meta": {
+    "label": "fix-match-index",
+    "git_sha": "bbaeb265c190b0147bffded68d02a53a2c6e841e",
+    "git_ref": "working-tree",
+    "git_dirty": true,
+    "build_type": "Release",
+    "nodes": 3,
+    "quick": false,
+    "seed": 42,
+    "failover_writers": 32,
+    "timestamp": "2026-10-19T16:18:22-04:00",
+    "wall_seconds": 153.6,
+    "command": "python3 bench/harness.py run --label fix-match-index",
+    "host": {
+      "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+      "machine": "arm64",
+      "cpu_count": 10,
+      "python": "3.13.7"
+    }
+  },
+  "scenarios": {
+    "election": {
+      "time_to_first_write_ms": {
+        "n": 5,
+        "mean": 567.355,
+        "p50": 535.231,
+        "p90": 689.324,
+        "p99": 689.324,
+        "max": 689.324
+      },
+      "samples_ms": [
+        580.1,
+        522.7,
+        509.4,
+        689.3,
+        535.2
+      ]
+    },
+    "throughput": {
+      "params": {
+        "write_ratio": 0.5,
+        "keyspace": 1000,
+        "value_bytes": 64,
+        "duration_s": 5.0,
+        "warmup_s": 1.0
+      },
+      "levels": [
+        {
+          "clients": 1,
+          "ops": 32,
+          "ops_per_sec": 6.4,
+          "errors": 0,
+          "latency_ms": {
+            "all": {
+              "n": 32,
+              "mean": 151.842,
+              "p50": 150.669,
+              "p90": 155.001,
+              "p99": 198.295,
+              "max": 198.295
+            },
+            "set": {
+              "n": 20,
+              "mean": 154.867,
+              "p50": 150.6,
+              "p90": 156.086,
+              "p99": 198.295,
+              "max": 198.295
+            },
+            "get": {
+              "n": 12,
+              "mean": 146.799,
+              "p50": 150.669,
+              "p90": 152.582,
+              "p99": 154.23,
+              "max": 154.23
+            }
+          },
+          "client_cpu_util": 0.0
+        },
+        {
+          "clients": 4,
+          "ops": 128,
+          "ops_per_sec": 25.6,
+          "errors": 0,
+          "latency_ms": {
+            "all": {
+              "n": 128,
+              "mean": 152.312,
+              "p50": 150.859,
+              "p90": 156.469,
+              "p99": 196.474,
+              "max": 196.492
+            },
+            "set": {
+              "n": 75,
+              "mean": 153.666,
+              "p50": 150.905,
+              "p90": 178.95,
+              "p99": 196.492,
+              "max": 196.492
+            },
+            "get": {
+              "n": 53,
+              "mean": 150.395,
+              "p50": 150.797,
+              "p90": 155.557,
+              "p99": 159.825,
+              "max": 159.825
+            }
+          },
+          "client_cpu_util": 0.0
+        },
+        {
+          "clients": 16,
+          "ops": 512,
+          "ops_per_sec": 102.4,
+          "errors": 0,
+          "latency_ms": {
+            "all": {
+              "n": 512,
+              "mean": 152.172,
+              "p50": 151.127,
+              "p90": 167.119,
+              "p99": 226.318,
+              "max": 230.857
+            },
+            "set": {
+              "n": 255,
+              "mean": 153.917,
+              "p50": 151.165,
+              "p90": 170.998,
+              "p99": 227.008,
+              "max": 230.857
+            },
+            "get": {
+              "n": 257,
+              "mean": 150.44,
+              "p50": 151.097,
+              "p90": 167.112,
+              "p99": 225.986,
+              "max": 226.353
+            }
+          },
+          "client_cpu_util": 0.01
+        },
+        {
+          "clients": 64,
+          "ops": 2048,
+          "ops_per_sec": 409.6,
+          "errors": 0,
+          "latency_ms": {
+            "all": {
+              "n": 2048,
+              "mean": 151.828,
+              "p50": 151.238,
+              "p90": 161.35,
+              "p99": 231.669,
+              "max": 233.765
+            },
+            "set": {
+              "n": 1029,
+              "mean": 151.599,
+              "p50": 151.372,
+              "p90": 161.296,
+              "p99": 230.022,
+              "max": 233.765
+            },
+            "get": {
+              "n": 1019,
+              "mean": 152.059,
+              "p50": 151.126,
+              "p90": 161.437,
+              "p99": 232.432,
+              "max": 233.71
+            }
+          },
+          "client_cpu_util": 0.04
+        }
+      ],
+      "replicas_converged": true,
+      "convergence_ms": 151.2,
+      "diverged_replicas": 0
+    },
+    "failover": {
+      "failover_ms": {
+        "n": 5,
+        "mean": 429.82,
+        "p50": 391.8,
+        "p90": 506.8,
+        "p99": 506.8,
+        "max": 506.8
+      },
+      "failover_timeouts": 0,
+      "recovery_timeout_s": 30.0,
+      "lost_acked_writes": 0,
+      "read_mismatches": 0,
+      "acked_writes": 2240,
+      "catchup_ms": {
+        "n": 0
+      },
+      "catchup_timeouts": 5,
+      "catchup_timeout_s": 20.0,
+      "writers": 32,
+      "trials": [
+        {
+          "failover_ms": 474.0,
+          "acked_writes": 448,
+          "acked_after_kill": 256,
+          "lost_acked_writes": 0,
+          "read_mismatches": 0,
+          "read_sample": 100,
+          "catchup_ms": null
+        },
+        {
+          "failover_ms": 506.8,
+          "acked_writes": 448,
+          "acked_after_kill": 256,
+          "lost_acked_writes": 0,
+          "read_mismatches": 0,
+          "read_sample": 100,
+          "catchup_ms": null
+        },
+        {
+          "failover_ms": 391.0,
+          "acked_writes": 448,
+          "acked_after_kill": 256,
+          "lost_acked_writes": 0,
+          "read_mismatches": 0,
+          "read_sample": 100,
+          "catchup_ms": null
+        },
+        {
+          "failover_ms": 385.5,
+          "acked_writes": 448,
+          "acked_after_kill": 256,
+          "lost_acked_writes": 0,
+          "read_mismatches": 0,
+          "read_sample": 100,
+          "catchup_ms": null
+        },
+        {
+          "failover_ms": 391.8,
+          "acked_writes": 448,
+          "acked_after_kill": 256,
+          "lost_acked_writes": 0,
+          "read_mismatches": 0,
+          "read_sample": 100,
+          "catchup_ms": null
+        }
+      ]
+    },
+    "quorum": {
+      "nodes_down_minority": 1,
+      "minority_down_write_ok": true,
+      "majority_down_write_acked": false,
+      "quorum_restored_write_ok": true,
+      "quorum_restore_ms": 366.3
+    }
+  },
+  "checks": [
+    {
+      "name": "Replicas converge to identical state",
+      "passed": true,
+      "detail": "0 diverged replica(s)"
+    },
+    {
+      "name": "No request errors under steady load",
+      "passed": true,
+      "detail": "0 errors"
+    },
+    {
+      "name": "Cluster recovers from every leader crash",
+      "passed": true,
+      "detail": "0 trial(s) without a writable leader after 30.0s"
+    },
+    {
+      "name": "No acknowledged write lost across leader crash",
+      "passed": true,
+      "detail": "0 lost of 2240 acked (verified in 5 trial(s)); 0 read mismatches"
+    },
+    {
+      "name": "Restarted node catches up",
+      "passed": false,
+      "detail": "5 trial(s) exceeded 20.0s"
+    },
+    {
+      "name": "Available with minority of nodes down",
+      "passed": true,
+      "detail": "1 follower(s) killed"
+    },
+    {
+      "name": "No write acknowledged without quorum",
+      "passed": true,
+      "detail": "majority killed, leader left alone"
+    },
+    {
+      "name": "Liveness restored when quorum returns",
+      "passed": true,
+      "detail": "366.3 ms"
+    }
+  ]
+}

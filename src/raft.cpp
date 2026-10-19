@@ -147,8 +147,8 @@ void RaftNode::send_append_entries(int peer_index) {
     const std::string rpc_message = rpc.str();
 
     // Release the lock before the async network call
-    boost::asio::post(io_context_, [this, self = shared_from_this(), peer_index, entries_to_send, rpc_message]() {
-        send_rpc(peer_addresses_[peer_index], rpc_message, [this, self, peer_index, entries_to_send](const std::string& response) {
+    boost::asio::post(io_context_, [this, self = shared_from_this(), peer_index, prev_log_index, entries_to_send, rpc_message]() {
+        send_rpc(peer_addresses_[peer_index], rpc_message, [this, self, peer_index, prev_log_index, entries_to_send](const std::string& response) {
             std::lock_guard<std::mutex> lock(mutex_);
             if (state_ != RaftState::Leader) return;
 
@@ -165,8 +165,11 @@ void RaftNode::send_append_entries(int peer_index) {
             }
 
             if (result == "Success") {
-                next_index_[peer_index] = log_.size();
-                match_index_[peer_index] = next_index_[peer_index] - 1;
+                // Credit the follower only with the entries this RPC carried; the leader's log may
+                // have grown since it was sent. Responses can arrive out of order, so never regress.
+                int replicated_up_to = prev_log_index + (int)entries_to_send;
+                match_index_[peer_index] = std::max(match_index_[peer_index], replicated_up_to);
+                next_index_[peer_index] = match_index_[peer_index] + 1;
                 advance_commit_index();
             } else {
                 next_index_[peer_index] = std::max(1, next_index_[peer_index] - 1);
