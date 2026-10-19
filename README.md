@@ -9,7 +9,7 @@ This project is a from-scratch implementation of a fault-tolerant, distributed k
 -   **Distributed Consensus**: Uses the Raft algorithm for leader election and replicated log management to ensure data consistency.
 -   **Fault Tolerance**: The cluster can tolerate failures of minority nodes and continue to serve requests.
 -   **Automated Cluster Launching**: Includes a powerful script to build, clean, and launch a multi-node cluster in separate, customizable terminal windows.
--   **Persistence**: Each node persists its command log to an Append-Only File (AOF), allowing for state recovery after a crash.
+-   **Persistence**: Each node keeps its key/value state in an Append-Only File (AOF) and its Raft term, vote and log in a separate fsync'd state file (`AOFs/node_<id>.raft`), so a restarted node keeps its promises (at most one vote per term) and only re-fetches entries it is missing. On macOS `fsync` does not flush the drive's own cache, so this protects against process crashes but not necessarily power loss.
 -   **Concurrent & Asynchronous Networking**: Built on a multi-threaded, event-driven server architecture using Boost.Asio to handle many simultaneous client connections efficiently.
 -   **Modern C++**: Utilizes C++20 features, including concurrency primitives and coroutines for clean, modern asynchronous code.
 -   **Low-Latency Replication**: New entries are replicated as soon as they arrive (not on the next heartbeat), batched with one in-flight request per follower. Median write latency is about 1 ms on a local 3-node cluster.

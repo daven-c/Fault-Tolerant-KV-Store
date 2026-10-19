@@ -4,6 +4,7 @@
 #include "kv_store.h"
 #include <boost/asio.hpp>
 #include <chrono>
+#include <cstdio>
 #include <functional>
 #include <map>
 #include <memory>
@@ -21,7 +22,9 @@ struct LogEntry {
 class RaftNode : public std::enable_shared_from_this<RaftNode> {
 public:
     RaftNode(int id, const std::vector<std::string>& peer_addresses,
-             KeyValueStore& store, boost::asio::io_context& io_context);
+             KeyValueStore& store, boost::asio::io_context& io_context,
+             const std::string& state_path);
+    ~RaftNode();
 
     void start();
     void stop();
@@ -37,6 +40,13 @@ private:
     void send_append_entries(int peer_index);
     void advance_commit_index();
     void step_down(int new_term);
+    // Durable Raft state (term, vote, log, applied index) in an append-only file.
+    void load_state();
+    void persist_term_and_vote();
+    void persist_entries(size_t from_index);
+    void persist_applied();
+    void append_state(const std::string& records, bool durable);
+
     void send_rpc(const std::string& peer_address, const std::string& rpc_message, std::function<void(const std::string&)> callback);
 
     int id_;
@@ -58,6 +68,8 @@ private:
     std::map<int, std::function<void(const std::string&)>> client_callbacks_;
     
     KeyValueStore& kv_store_;
+    std::string state_path_;
+    std::FILE* state_file_{nullptr};
     std::vector<std::string> peer_addresses_;
     boost::asio::io_context& io_context_;
     boost::asio::steady_timer election_timer_;

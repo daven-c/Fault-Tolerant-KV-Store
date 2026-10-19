@@ -53,3 +53,4 @@ build/
 # Benchmark harness build cache
 bench/.cache/
 __pycache__/
+*.raft

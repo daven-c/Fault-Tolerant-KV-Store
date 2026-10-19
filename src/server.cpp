@@ -115,7 +115,8 @@ int main(int argc, char* argv[]) {
         std::filesystem::create_directory("AOFs");
 
         KeyValueStore kv_store("AOFs/node_" + std::to_string(my_id) + ".aof");
-        auto raft_node = std::make_shared<RaftNode>(my_id, peer_addresses, kv_store, io_context);
+        auto raft_node = std::make_shared<RaftNode>(my_id, peer_addresses, kv_store, io_context,
+                                                    "AOFs/node_" + std::to_string(my_id) + ".raft");
         
         Server server(io_context, port, raft_node);
         std::cout << "Server listening on port " << port << "..." << std::endl;

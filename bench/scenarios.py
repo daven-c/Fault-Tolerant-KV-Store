@@ -345,10 +345,11 @@ async def raft_rpc(env: Env) -> dict:
 
         # One vote per term, even across a crash and restart.
         vote_term = FAKE_TERM + 10
-        first = await _rpc(node, f"RequestVote {vote_term} 1 100 {FAKE_TERM}")
+        # Both candidates claim a log at least as up to date as the node's (last term T + 1).
+        first = await _rpc(node, f"RequestVote {vote_term} 1 100 {T + 1}")
         cluster.kill_node(0)
         cluster.start_node(0)
-        second = await _rpc(cluster.addrs[0], f"RequestVote {vote_term} 2 100 {FAKE_TERM}")
+        second = await _rpc(cluster.addrs[0], f"RequestVote {vote_term} 2 100 {T + 1}")
     finally:
         cluster.stop()
 
