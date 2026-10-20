@@ -1,0 +1,729 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Raft Cluster Dashboard</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f6f6f4;
+    --surface: #fcfcfb;
+    --surface-2: #f0efec;
+    --line: #e2e1dc;
+    --text: #0b0b0b;
+    --text-2: #52514e;
+    --text-3: #7a7974;
+    --accent: #2a78d6;
+    --accent-soft: #cde2fb;
+    /* node states: status palette (fixed) + blue for the leader; always paired with icon + label */
+    --st-leader: #2a78d6;
+    --st-follower: #8b8a84;
+    --st-candidate: #fab219;
+    --st-paused: #ec835a;
+    --st-down: #d03b3b;
+    --mesh: #d9d8d2;
+    --shadow: 0 1px 2px rgb(0 0 0 / .06), 0 4px 16px rgb(0 0 0 / .05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #121211;
+      --surface: #1a1a19;
+      --surface-2: #232321;
+      --line: #2e2e2b;
+      --text: #f0efec;
+      --text-2: #c3c2b7;
+      --text-3: #8f8e86;
+      --accent: #3987e5;
+      --accent-soft: #1c3a5e;
+      --st-leader: #3987e5;
+      --st-follower: #9a998f;
+      --mesh: #2c2c29;
+      --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #121211;
+    --surface: #1a1a19;
+    --surface-2: #232321;
+    --line: #2e2e2b;
+    --text: #f0efec;
+    --text-2: #c3c2b7;
+    --text-3: #8f8e86;
+    --accent: #3987e5;
+    --accent-soft: #1c3a5e;
+    --st-leader: #3987e5;
+    --st-follower: #9a998f;
+    --mesh: #2c2c29;
+    --shadow: none;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
+  button, input, select { font: inherit; color: inherit; }
+
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px;
+    padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--surface);
+  }
+  header h1 { font-size: 16px; font-weight: 650; margin: 0; letter-spacing: -.01em; }
+  header h1 span { color: var(--text-3); font-weight: 450; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px;
+    border: 1px solid var(--line); border-radius: 999px; color: var(--text-2); font-size: 12.5px;
+    background: var(--surface-2);
+  }
+  .chip b { color: var(--text); font-weight: 600; }
+  .spacer { flex: 1; }
+  .create { display: flex; align-items: center; gap: 8px; }
+  .stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .stepper button { width: 30px; height: 30px; border: 0; background: var(--surface-2); cursor: pointer; }
+  .stepper button:hover { background: var(--line); }
+  .stepper output { min-width: 64px; text-align: center; font-size: 13px; }
+  .btn {
+    height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--surface-2); cursor: pointer; white-space: nowrap;
+  }
+  .btn:hover:not(:disabled) { border-color: var(--text-3); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.danger:not(:disabled) { color: var(--st-down); }
+  .icon-btn { width: 32px; padding: 0; }
+
+  main {
+    display: grid; gap: 16px; padding: 16px 20px 24px;
+    grid-template-columns: minmax(0, 1.35fr) minmax(320px, 1fr);
+    max-width: 1440px; margin: 0 auto;
+  }
+  @media (max-width: 920px) { main { grid-template-columns: minmax(0, 1fr); padding: 12px 16px 20px; } }
+  .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); min-width: 0; }
+  .panel > h2 {
+    margin: 0; padding: 12px 16px 0; font-size: 12px; font-weight: 600; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--text-3);
+  }
+  .panel-body { padding: 12px 16px 16px; }
+
+  /* map */
+  .map-wrap { position: relative; }
+  #map { display: block; width: 100%; height: auto; max-height: 72vh; aspect-ratio: 1; margin: 0 auto; touch-action: manipulation; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 0 16px 14px; color: var(--text-2); font-size: 12.5px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .node { cursor: pointer; }
+  .node:focus { outline: none; }
+  .node:focus-visible .sel-ring { stroke: var(--text-2); stroke-opacity: 1; }
+  .node .body { transition: fill .25s, stroke .25s; }
+  .node text { pointer-events: none; }
+  .packet { pointer-events: none; }
+  .map-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 12px 16px 0; }
+  .map-head h2 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); }
+  .hint { color: var(--text-3); font-size: 12px; }
+
+  /* inspector */
+  .insp-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .insp-head h3 { margin: 0; font-size: 18px; letter-spacing: -.01em; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 6px;
+    font-size: 12px; font-weight: 600; border: 1px solid currentColor;
+  }
+  dl.kv { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; margin: 0 0 14px; }
+  dl.kv div { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+  dl.kv dt { font-size: 11.5px; color: var(--text-3); }
+  dl.kv dd { margin: 2px 0 0; font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .muted { color: var(--text-3); }
+  .empty { color: var(--text-3); padding: 6px 0 2px; }
+
+  /* load */
+  .load-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 8px; }
+  .load-row label { display: flex; align-items: center; gap: 10px; color: var(--text-2); }
+  .load-row input[type=range] { width: 180px; accent-color: var(--accent); }
+  .big { font-size: 26px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .big small { font-size: 13px; font-weight: 500; color: var(--text-3); margin-left: 4px; }
+  .stat { display: flex; flex-direction: column; }
+  .stat span { font-size: 11.5px; color: var(--text-3); }
+  #spark { display: block; width: 100%; height: 120px; }
+  .spark-wrap { position: relative; }
+  .tooltip {
+    position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 9px; font-size: 12px; box-shadow: var(--shadow); white-space: nowrap;
+    transform: translate(-50%, -100%); display: none; color: var(--text);
+  }
+  .tooltip .muted { font-size: 11.5px; }
+
+  /* console */
+  .console-form { display: flex; gap: 8px; margin-bottom: 8px; }
+  .console-form select { height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); padding: 0 8px; max-width: 46%; }
+  .console-form input {
+    flex: 1; min-width: 0; height: 34px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--surface-2); padding: 0 10px;
+  }
+  .console-form input:focus, .console-form select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .quick { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .quick button { border: 1px dashed var(--line); background: none; border-radius: 6px; padding: 2px 8px; cursor: pointer; color: var(--text-2); font-size: 12.5px; }
+  .quick button:hover { border-color: var(--text-3); color: var(--text); }
+  #history { max-height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+  .entry { border-left: 2px solid var(--line); padding: 2px 0 2px 10px; }
+  .entry .cmd { color: var(--text); }
+  .entry .cmd::before { content: "› "; color: var(--text-3); }
+  .entry pre { margin: 2px 0; white-space: pre-wrap; word-break: break-word; color: var(--text-2); font: inherit; }
+  .entry .meta { font-size: 11.5px; color: var(--text-3); }
+  .entry.err { border-left-color: var(--st-down); }
+
+  /* events */
+  #events { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; }
+  #events li { display: grid; grid-template-columns: 62px 18px 1fr; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  #events li:last-child { border-bottom: 0; }
+  #events time { color: var(--text-3); font-variant-numeric: tabular-nums; font-size: 12px; }
+  #events .ic { text-align: center; }
+
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .toast {
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--text); color: var(--bg);
+    padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100% - 32px);
+  }
+  .toast.show { opacity: 1; }
+  .conn-lost { color: var(--st-down); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Raft cluster <span>· live dashboard</span></h1>
+  <div class="chips" id="chips" aria-live="polite"></div>
+  <div class="spacer"></div>
+  <div class="create">
+    <div class="stepper" role="group" aria-label="Cluster size">
+      <button type="button" id="size-dec" aria-label="Fewer nodes">−</button>
+      <output id="size-out">5 nodes</output>
+      <button type="button" id="size-inc" aria-label="More nodes">+</button>
+    </div>
+    <button class="btn primary" id="create" type="button">Create new cluster</button>
+    <button class="btn icon-btn" id="theme" type="button" aria-label="Toggle light/dark theme" title="Toggle theme">◐</button>
+  </div>
+</header>
+
+<main>
+  <div class="col">
+    <section class="panel map-wrap" aria-labelledby="map-title">
+      <div class="map-head"><h2 id="map-title">Cluster map</h2><span class="hint">Click a node to inspect, kill, pause or restart it</span></div>
+      <svg id="map" viewBox="-320 -300 640 600" role="img" aria-label="Cluster topology"></svg>
+      <div class="legend" aria-label="Legend">
+        <span><i style="background:var(--st-leader)"></i>★ Leader</span>
+        <span><i style="background:var(--st-follower)"></i>● Follower</span>
+        <span><i style="background:var(--st-candidate)"></i>? Candidate</span>
+        <span><i style="background:var(--st-paused)"></i>❚❚ Paused / not answering</span>
+        <span><i style="border:2px solid var(--st-down)"></i>✕ Down</span>
+        <span class="muted">Ring = entries applied · moving dots = entries replicated or votes requested</span>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="load-title">
+      <h2 id="load-title">Load generator</h2>
+      <div class="panel-body">
+        <div class="load-row">
+          <label>Clients <input type="range" id="load" min="0" max="64" step="1" value="0" aria-describedby="load-val"><output id="load-val" class="mono">0</output></label>
+          <div class="stat"><span>Throughput (last second)</span><div class="big" id="ops">0<small>ops/s</small></div></div>
+          <div class="stat"><span>Latency p50 / p99</span><div class="big" id="lat">–<small>ms</small></div></div>
+          <div class="stat"><span>Errors (total)</span><div class="big" id="errs">0</div></div>
+        </div>
+        <div class="spark-wrap">
+          <svg id="spark" role="img" aria-label="Throughput over the last 60 seconds"></svg>
+          <div class="tooltip" id="spark-tip"></div>
+        </div>
+        <p class="muted" style="margin:6px 0 0;font-size:12px">Closed-loop clients doing 50/50 SET/GET against the current leader. Throughput, ops/s, last 60 s.</p>
+      </div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="panel" aria-labelledby="insp-title">
+      <h2 id="insp-title">Node</h2>
+      <div class="panel-body" id="inspector"><p class="empty">Select a node on the map.</p></div>
+    </section>
+
+    <section class="panel" aria-labelledby="console-title">
+      <h2 id="console-title">Console</h2>
+      <div class="panel-body">
+        <form class="console-form" id="console-form" autocomplete="off">
+          <label class="sr" for="target">Send to</label>
+          <select id="target"><option value="">Cluster (auto-route to leader)</option></select>
+          <label class="sr" for="cmd">Command</label>
+          <input id="cmd" class="mono" placeholder="SET city Lisbon" spellcheck="false">
+          <button class="btn primary" type="submit">Send</button>
+        </form>
+        <div class="quick" id="quick">
+          <button type="button" class="mono">SET city Lisbon</button>
+          <button type="button" class="mono">GET city</button>
+          <button type="button" class="mono">DEL city</button>
+          <button type="button" class="mono">KEYS</button>
+        </div>
+        <div id="history" class="mono" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="events-title">
+      <h2 id="events-title">Events</h2>
+      <div class="panel-body"><ul id="events"></ul></div>
+    </section>
+  </div>
+</main>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const NS = "http://www.w3.org/2000/svg";
+const fmt = (n) => (n == null ? "–" : Number(n).toLocaleString());
+
+const STATE = {
+  leader:       { label: "Leader",        icon: "★", color: "var(--st-leader)" },
+  follower:     { label: "Follower",      icon: "●", color: "var(--st-follower)" },
+  candidate:    { label: "Candidate",     icon: "?", color: "var(--st-candidate)" },
+  paused:       { label: "Paused",        icon: "❚❚", color: "var(--st-paused)" },
+  unresponsive: { label: "Not answering", icon: "…", color: "var(--st-paused)" },
+  down:         { label: "Down",          icon: "✕", color: "var(--st-down)" },
+};
+const EVENT_ICON = {
+  cluster: ["◎", "var(--text-2)"], leader: ["★", "var(--st-leader)"], election: ["?", "var(--st-candidate)"],
+  kill: ["✕", "var(--st-down)"], restart: ["↻", "var(--text-2)"], pause: ["❚❚", "var(--st-paused)"],
+  resume: ["▶", "var(--text-2)"], warn: ["!", "var(--st-paused)"], load: ["≋", "var(--text-2)"],
+};
+
+let snap = null, lastEvent = 0, generation = -1, selected = null, desiredSize = 5, maxNodes = 7;
+let prevNodes = [];
+const layer = {};
+
+// ---------- api ----------
+async function post(path, body = {}) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+// ---------- map ----------
+function el(tag, attrs = {}, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function positions(n) {
+  if (n === 1) return [[0, 0]];
+  const r = n <= 3 ? 170 : 205;
+  return Array.from({ length: n }, (_, i) => {
+    const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+    return [Math.cos(a) * r, Math.sin(a) * r];
+  });
+}
+function initMap() {
+  const svg = $("#map");
+  svg.innerHTML = "";
+  layer.mesh = el("g", {}, svg);
+  layer.spokes = el("g", {}, svg);
+  layer.packets = el("g", {}, svg);
+  layer.nodes = el("g", {}, svg);
+  layer.nodeEls = null;
+}
+function arcPath(r, frac) {
+  frac = Math.max(0, Math.min(0.9999, frac));
+  const a = frac * 2 * Math.PI, x = r * Math.sin(a), y = -r * Math.cos(a);
+  return `M 0 ${-r} A ${r} ${r} 0 ${a > Math.PI ? 1 : 0} 1 ${x} ${y}`;
+}
+function buildNodes(count, pos) {
+  layer.nodes.innerHTML = "";
+  layer.nodeEls = Array.from({ length: count }, (_, i) => {
+    const [x, y] = pos[i];
+    const g = el("g", { class: "node", transform: `translate(${x} ${y})`, tabindex: 0, role: "button" }, layer.nodes);
+    g.addEventListener("click", () => select(i));
+    g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(i); } });
+    el("circle", { r: 54, fill: "transparent" }, g);  // generous hit target
+    const sel = el("circle", { class: "sel-ring", r: 50, fill: "none", stroke: "var(--text)", "stroke-width": 2, "stroke-dasharray": "3 4" }, g);
+    el("circle", { r: 43, fill: "none", stroke: "var(--line)", "stroke-width": 4 }, g);
+    const ring = el("path", { fill: "none", "stroke-width": 4, "stroke-linecap": "round" }, g);
+    const body = el("circle", { class: "body", r: 35 }, g);
+    const id = el("text", { y: 2, "text-anchor": "middle", "dominant-baseline": "middle", "font-size": 24, "font-weight": 700 }, g);
+    id.textContent = i;
+    const icon = el("text", { y: -20, "text-anchor": "middle", "font-size": 12 }, g);
+    const label = el("text", { y: 66, "text-anchor": "middle", "font-size": 13, "font-weight": 600, fill: "var(--text)" }, g);
+    const sub = el("text", { y: 83, "text-anchor": "middle", "font-size": 12, fill: "var(--text-3)", class: "mono" }, g);
+    return { g, sel, ring, body, id, icon, label, sub };
+  });
+}
+function renderMap(nodes) {
+  const pos = positions(nodes.length);
+  const leader = nodes.find((n) => n.status === "leader");
+  const maxLog = Math.max(1, ...nodes.map((n) => n.log || 0));
+
+  // mesh: every pair, recessive
+  layer.mesh.innerHTML = "";
+  for (let i = 0; i < nodes.length; i++)
+    for (let j = i + 1; j < nodes.length; j++)
+      el("line", { x1: pos[i][0], y1: pos[i][1], x2: pos[j][0], y2: pos[j][1], stroke: "var(--mesh)", "stroke-width": 1 }, layer.mesh);
+
+  // spokes: leader -> each follower, labelled with replication lag
+  layer.spokes.innerHTML = "";
+  if (leader) {
+    const [lx, ly] = pos[leader.id];
+    nodes.forEach((n, i) => {
+      if (i === leader.id) return;
+      const [x, y] = pos[i];
+      const reachable = ["follower", "candidate"].includes(n.status);
+      const match = leader.match?.[i];
+      const lag = match == null ? null : Math.max(0, leader.log - match);
+      el("line", {
+        x1: lx, y1: ly, x2: x, y2: y, stroke: reachable ? "var(--st-leader)" : "var(--st-down)",
+        "stroke-width": 2, "stroke-opacity": reachable ? (lag ? 0.55 : 0.35) : 0.35,
+        "stroke-dasharray": reachable ? (lag ? "6 5" : "") : "2 6",
+      }, layer.spokes);
+      if (lag && reachable) {
+        const mx = (lx + x) / 2, my = (ly + y) / 2;
+        const t = el("text", { x: mx, y: my - 6, "text-anchor": "middle", "font-size": 12, fill: "var(--text-2)", class: "mono" }, layer.spokes);
+        t.textContent = `${fmt(lag)} behind`;
+      }
+    });
+  }
+
+  // nodes: built once per cluster and updated in place, so clicks and keyboard focus survive polls
+  if (!layer.nodeEls || layer.nodeEls.length !== nodes.length) buildNodes(nodes.length, pos);
+  nodes.forEach((n, i) => {
+    const s = STATE[n.status] || STATE.down;
+    const e = layer.nodeEls[i];
+    const down = n.status === "down";
+    const strong = ["leader", "candidate", "paused", "unresponsive"].includes(n.status);
+    e.g.setAttribute("aria-label", `Node ${i}, ${s.label}${n.term != null ? `, term ${n.term}` : ""}`);
+    e.g.setAttribute("aria-pressed", selected === i);
+    e.sel.setAttribute("stroke-opacity", selected === i ? 0.9 : 0);
+    const frac = n.applied != null && !down ? n.applied / maxLog : 0;
+    e.ring.setAttribute("d", frac > 0 ? arcPath(43, frac) : "");
+    e.ring.setAttribute("stroke", s.color);
+    e.body.setAttribute("fill", down ? "var(--surface)" : s.color);
+    e.body.setAttribute("fill-opacity", down ? 1 : n.status === "follower" ? 0.22 : 0.9);
+    e.body.setAttribute("stroke", s.color);
+    e.body.setAttribute("stroke-width", down ? 2.5 : 0);
+    e.body.setAttribute("stroke-dasharray", down ? "5 4" : "");
+    e.id.setAttribute("fill", strong ? "#fff" : "var(--text)");
+    e.icon.setAttribute("fill", strong ? "#fff" : s.color);
+    e.icon.textContent = s.icon;
+    e.label.textContent = `${s.icon} ${s.label}`;
+    e.sub.textContent = n.term != null ? `term ${n.term} · log ${fmt(n.log)}` : n.addr;
+  });
+
+  animateTraffic(nodes, pos);
+  prevNodes = nodes;
+}
+
+// Moving dots derived from real state changes: a follower's match index advancing means the
+// leader replicated entries to it; a node becoming candidate means it requested votes.
+function animateTraffic(nodes, pos) {
+  if (!prevNodes.length || prevNodes.length !== nodes.length) return;
+  const leader = nodes.find((n) => n.status === "leader");
+  const prevLeader = prevNodes.find((n) => n.status === "leader");
+  if (leader && prevLeader && prevLeader.id === leader.id) {
+    nodes.forEach((n, i) => {
+      if (i === leader.id) return;
+      const before = prevLeader.match?.[i], now = leader.match?.[i];
+      if (now != null && before != null && now > before) packet(pos[leader.id], pos[i], "var(--st-leader)", Math.min(3, now - before));
+    });
+  }
+  nodes.forEach((n, i) => {
+    const p = prevNodes[i];
+    if (n.status === "candidate" && (p.status !== "candidate" || p.term !== n.term))
+      nodes.forEach((m, j) => { if (j !== i && m.status !== "down") packet(pos[i], pos[j], "var(--st-candidate)", 1); });
+  });
+}
+function packet(from, to, color, count) {
+  for (let k = 0; k < count; k++) {
+    const c = el("circle", { r: 5, fill: color, class: "packet", stroke: "var(--surface)", "stroke-width": 2 }, layer.packets);
+    const start = performance.now() + k * 70, dur = 380;
+    (function step(now) {
+      const t = Math.min(1, Math.max(0, (now - start) / dur));
+      const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+      c.setAttribute("cx", from[0] + (to[0] - from[0]) * e);
+      c.setAttribute("cy", from[1] + (to[1] - from[1]) * e);
+      c.setAttribute("opacity", t < 0.85 ? 1 : (1 - t) / 0.15);
+      if (t < 1) requestAnimationFrame(step); else c.remove();
+    })(performance.now());
+  }
+}
+
+// ---------- inspector ----------
+function select(i) {
+  selected = selected === i ? null : i;
+  if (snap) { renderMap(snap.nodes); renderInspector(); }
+  if (selected != null) $("#target").value = "";
+}
+let inspectorFor = null;
+function renderInspector() {
+  const box = $("#inspector");
+  const n = snap?.nodes?.[selected];
+  if (selected == null || !n) {
+    if (inspectorFor !== null || !box.querySelector(".empty")) box.innerHTML = '<p class="empty">Select a node on the map.</p>';
+    inspectorFor = null;
+    return;
+  }
+  // Build the panel once per selection; afterwards only update values, so buttons stay clickable.
+  if (inspectorFor !== selected) {
+    inspectorFor = selected;
+    box.innerHTML = `
+      <div class="insp-head">
+        <h3>Node ${n.id}</h3>
+        <span class="badge" data-f="badge"></span>
+        <span class="muted mono" style="margin-left:auto;font-size:12px">${n.addr}</span>
+      </div>
+      <dl class="kv">
+        <div><dt>Term</dt><dd data-f="term"></dd></div>
+        <div><dt>Voted for</dt><dd data-f="voted"></dd></div>
+        <div><dt>Keys</dt><dd data-f="keys"></dd></div>
+        <div><dt>Log entries</dt><dd data-f="log"></dd></div>
+        <div><dt>Committed</dt><dd data-f="commit"></dd></div>
+        <div><dt>Applied</dt><dd data-f="applied"></dd></div>
+      </dl>
+      <p class="muted" data-f="note" style="margin:-4px 0 12px;font-size:12.5px"></p>
+      <div class="actions">
+        <button class="btn danger" data-act="kill">✕ Kill</button>
+        <button class="btn" data-act="restart"></button>
+        <button class="btn" data-act="pause">❚❚ Pause</button>
+        <button class="btn" data-act="resume">▶ Resume</button>
+        <button class="btn" data-act="target">› Send to this node</button>
+      </div>`;
+    box.querySelectorAll("button[data-act]").forEach((b) => b.addEventListener("click", () => nodeAction(inspectorFor, b.dataset.act)));
+  }
+  const s = STATE[n.status] || STATE.down;
+  const alive = n.status !== "down";
+  const leaderNode = snap.nodes.find((m) => m.status === "leader");
+  const match = leaderNode && leaderNode.id !== n.id ? leaderNode.match?.[n.id] : null;
+  const f = (k) => box.querySelector(`[data-f="${k}"]`);
+  const b = (k) => box.querySelector(`[data-act="${k}"]`);
+  f("badge").textContent = `${s.icon} ${s.label}`;
+  f("badge").style.color = s.color;
+  f("term").textContent = fmt(n.term);
+  f("voted").textContent = n.voted_for == null ? "–" : n.voted_for < 0 ? "nobody" : `node ${n.voted_for}`;
+  f("keys").textContent = fmt(n.keys);
+  f("log").textContent = fmt(n.log);
+  f("commit").textContent = fmt(n.commit);
+  f("applied").textContent = fmt(n.applied);
+  f("note").textContent = (
+    n.status === "leader" ? "Accepts client commands and replicates them to followers."
+    : match != null && ["follower", "candidate"].includes(n.status) ? `Leader has confirmed ${fmt(match)} of its ${fmt(leaderNode.log)} entries on this node.`
+    : n.status === "paused" ? "Frozen with SIGSTOP. If it was the leader, the others time out and elect a new one."
+    : n.status === "down" ? "Process is not running. Start it to rejoin with its persisted log."
+    : n.status === "unresponsive" ? "Process is running but not answering status requests."
+    : "") + (["paused", "down", "unresponsive"].includes(n.status) && n.term != null ? " Numbers shown are its last known state." : "");
+  b("kill").disabled = !alive;
+  b("restart").textContent = alive ? "↻ Restart" : "↻ Start";
+  b("pause").disabled = !["leader", "follower", "candidate", "unresponsive"].includes(n.status);
+  b("resume").disabled = n.status !== "paused";
+  b("target").disabled = !alive || n.status === "paused";
+}
+async function nodeAction(id, act) {
+  if (act === "target") { $("#target").value = String(id); $("#cmd").focus(); return; }
+  try { await post(`/api/node/${id}/${act}`); poll(); } catch (e) { toast(e.message); }
+}
+
+// ---------- header ----------
+function renderChips(nodes) {
+  const leader = nodes.find((n) => n.status === "leader");
+  const up = nodes.filter((n) => ["leader", "follower", "candidate"].includes(n.status)).length;
+  const quorum = Math.floor(nodes.length / 2) + 1;
+  const term = Math.max(0, ...nodes.map((n) => n.term || 0));
+  const commit = leader ? leader.commit : null;
+  const hasQuorum = up >= quorum;
+  $("#chips").innerHTML = `
+    <span class="chip">Leader <b>${leader ? `node ${leader.id}` : "none"}</b></span>
+    <span class="chip">Term <b>${term}</b></span>
+    <span class="chip" style="${hasQuorum ? "" : "color:var(--st-down);border-color:var(--st-down)"}">${hasQuorum ? "●" : "!"} Up <b>${up}/${nodes.length}</b> · quorum ${quorum}</span>
+    <span class="chip">Committed <b>${fmt(commit)}</b></span>`;
+}
+function renderSize() {
+  $("#size-out").textContent = `${desiredSize} node${desiredSize === 1 ? "" : "s"}`;
+  $("#size-dec").disabled = desiredSize <= 1;
+  $("#size-inc").disabled = desiredSize >= maxNodes;
+}
+function renderTargets(nodes) {
+  const sel = $("#target"), cur = sel.value;
+  const want = ["", ...nodes.map((n) => String(n.id))];
+  const have = [...sel.options].map((o) => o.value);
+  if (want.join() !== have.join()) {
+    sel.innerHTML = '<option value="">Cluster (auto-route to leader)</option>' +
+      nodes.map((n) => `<option value="${n.id}">Node ${n.id} directly</option>`).join("");
+    sel.value = want.includes(cur) ? cur : "";
+  }
+}
+
+// ---------- events ----------
+let shownEvent = 0;
+function addEvents(events) {
+  const ul = $("#events");
+  for (const e of events) {
+    if (e.id <= shownEvent) continue;
+    shownEvent = e.id;
+    const [icon, color] = EVENT_ICON[e.kind] || ["•", "var(--text-2)"];
+    const li = document.createElement("li");
+    const t = new Date(e.t * 1000).toLocaleTimeString([], { hour12: false });
+    li.innerHTML = `<time>${t}</time><span class="ic" style="color:${color}" aria-hidden="true">${icon}</span><span></span>`;
+    li.lastChild.textContent = e.text;
+    ul.prepend(li);
+  }
+  while (ul.children.length > 150) ul.lastChild.remove();
+}
+
+// ---------- load ----------
+function renderLoad(load) {
+  const series = load.series.slice(-60);
+  const last = series[series.length - 1];
+  $("#ops").innerHTML = `${fmt(last ? last.ops : 0)}<small>ops/s</small>`;
+  $("#lat").innerHTML = last && last.p50 != null ? `${last.p50} / ${last.p99}<small>ms</small>` : "–<small>ms</small>";
+  $("#errs").textContent = fmt(load.errors);
+  if (document.activeElement !== $("#load")) { $("#load").value = load.clients; $("#load-val").textContent = load.clients; }
+  drawSpark(series);
+}
+function drawSpark(series) {
+  const svg = $("#spark");
+  const W = svg.clientWidth || 600, H = 120, padL = 44, padR = 8, padT = 10, padB = 20;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = "";
+  const max = Math.max(10, ...series.map((d) => d.ops));
+  const nice = niceMax(max);
+  const x = (i) => padL + (i / 59) * (W - padL - padR);
+  const y = (v) => padT + (1 - v / nice) * (H - padT - padB);
+  for (const v of [0, nice / 2, nice]) {
+    el("line", { x1: padL, x2: W - padR, y1: y(v), y2: y(v), stroke: "var(--line)", "stroke-width": 1 }, svg);
+    const t = el("text", { x: padL - 6, y: y(v), "text-anchor": "end", "dominant-baseline": "middle", "font-size": 11, fill: "var(--text-3)" }, svg);
+    t.textContent = fmt(Math.round(v));
+  }
+  for (const [i, label] of [[0, "60 s ago"], [59, "now"]]) {
+    const t = el("text", { x: x(i), y: H - 4, "text-anchor": i ? "end" : "start", "font-size": 11, fill: "var(--text-3)" }, svg);
+    t.textContent = label;
+  }
+  const offset = 60 - series.length;
+  if (series.length > 1) {
+    const pts = series.map((d, i) => [x(i + offset), y(d.ops)]);
+    el("path", { d: `M${pts[0][0]},${y(0)} L${pts.map((p) => p.join(",")).join(" L")} L${pts[pts.length - 1][0]},${y(0)} Z`,
+      fill: "var(--accent)", "fill-opacity": 0.12 }, svg);
+    el("path", { d: `M${pts.map((p) => p.join(",")).join(" L")}`, fill: "none", stroke: "var(--accent)", "stroke-width": 2,
+      "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+  }
+  const cross = el("line", { y1: padT, y2: H - padB, stroke: "var(--text-3)", "stroke-width": 1, opacity: 0 }, svg);
+  const dot = el("circle", { r: 4, fill: "var(--accent)", stroke: "var(--surface)", "stroke-width": 2, opacity: 0 }, svg);
+  const hit = el("rect", { x: padL, y: 0, width: W - padL - padR, height: H, fill: "transparent" }, svg);
+  const tip = $("#spark-tip");
+  hit.addEventListener("mousemove", (ev) => {
+    const r = svg.getBoundingClientRect();
+    const px = ((ev.clientX - r.left) / r.width) * W;
+    const i = Math.round(((px - padL) / (W - padL - padR)) * 59) - offset;
+    const d = series[Math.max(0, Math.min(series.length - 1, i))];
+    if (!d) return;
+    const cx = x(series.indexOf(d) + offset);
+    cross.setAttribute("x1", cx); cross.setAttribute("x2", cx); cross.setAttribute("opacity", 0.6);
+    dot.setAttribute("cx", cx); dot.setAttribute("cy", y(d.ops)); dot.setAttribute("opacity", 1);
+    tip.style.display = "block";
+    tip.style.left = `${(cx / W) * r.width}px`;
+    tip.style.top = `${(y(d.ops) / H) * r.height - 8}px`;
+    tip.innerHTML = `<b>${fmt(d.ops)} ops/s</b><div class="muted">${new Date(d.t * 1000).toLocaleTimeString([], { hour12: false })} · p50 ${d.p50 ?? "–"} ms · p99 ${d.p99 ?? "–"} ms${d.errors ? ` · ${d.errors} errors` : ""}</div>`;
+  });
+  hit.addEventListener("mouseleave", () => { tip.style.display = "none"; cross.setAttribute("opacity", 0); dot.setAttribute("opacity", 0); });
+}
+function niceMax(v) {
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+  return 10 * p;
+}
+
+// ---------- console ----------
+async function send(line) {
+  line = line.trim();
+  if (!line) return;
+  const target = $("#target").value;
+  const entry = document.createElement("div");
+  entry.className = "entry";
+  entry.innerHTML = `<div class="cmd"></div><pre>…</pre><div class="meta"></div>`;
+  entry.querySelector(".cmd").textContent = line + (target ? `   (to node ${target})` : "");
+  $("#history").appendChild(entry);
+  $("#history").scrollTop = 1e9;
+  try {
+    const r = await post("/api/command", { line, target: target === "" ? null : Number(target) });
+    entry.querySelector("pre").textContent = r.reply || "(empty reply)";
+    const role = snap?.nodes?.[r.node]?.status;
+    const hops = r.hops.length ? ` · redirected: ${r.hops.join(" → ")}` : "";
+    entry.querySelector(".meta").textContent = `node ${r.node}${role ? ` (${role})` : ""} · ${r.ms} ms${hops}`;
+    if (r.reply.startsWith("NOT_LEADER") || r.reply.startsWith("ERR")) entry.classList.add("err");
+  } catch (e) {
+    entry.classList.add("err");
+    entry.querySelector("pre").textContent = e.message;
+  }
+  $("#history").scrollTop = 1e9;
+}
+
+// ---------- loop ----------
+let failures = 0, polling = false, pollAgain = false;
+async function poll() {
+  // One request at a time: overlapping polls could apply snapshots out of order.
+  if (polling) { pollAgain = true; return; }
+  polling = true;
+  try {
+    const r = await fetch(`/api/state?since=${lastEvent}`);
+    const s = await r.json();
+    failures = 0;
+    if (s.generation !== generation) {
+      generation = s.generation; prevNodes = []; selected = null; inspectorFor = null; initMap(); renderInspector();      desiredSize = s.size || desiredSize;
+    }
+    maxNodes = s.max_nodes;
+    snap = s;
+    if (s.events.length) { lastEvent = s.events[s.events.length - 1].id; addEvents(s.events); }
+    if (s.nodes.length) { renderMap(s.nodes); renderChips(s.nodes); renderTargets(s.nodes); }
+    renderInspector();
+    renderLoad(s.load);
+    renderSize();
+  } catch {
+    if (++failures === 3) $("#chips").innerHTML = '<span class="chip conn-lost">! Lost connection to dashboard/server.py</span>';
+  } finally {
+    polling = false;
+    if (pollAgain) { pollAgain = false; poll(); }
+  }
+}
+
+// ---------- wiring ----------
+$("#size-dec").addEventListener("click", () => { desiredSize = Math.max(1, desiredSize - 1); renderSize(); });
+$("#size-inc").addEventListener("click", () => { desiredSize = Math.min(maxNodes, desiredSize + 1); renderSize(); });
+$("#create").addEventListener("click", async (e) => {
+  e.target.disabled = true;
+  try { await post("/api/cluster", { size: desiredSize }); $("#history").innerHTML = ""; poll(); }
+  catch (err) { toast(err.message); }
+  finally { e.target.disabled = false; }
+});
+$("#load").addEventListener("input", (e) => { $("#load-val").textContent = e.target.value; });
+$("#load").addEventListener("change", async (e) => { try { await post("/api/load", { clients: Number(e.target.value) }); } catch (err) { toast(err.message); } });
+$("#console-form").addEventListener("submit", (e) => { e.preventDefault(); const v = $("#cmd").value; $("#cmd").value = ""; send(v); });
+$("#quick").addEventListener("click", (e) => { if (e.target.tagName === "BUTTON") send(e.target.textContent); });
+$("#theme").addEventListener("click", () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("kv-theme", root.dataset.theme); } catch {}
+});
+try { const t = localStorage.getItem("kv-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+addEventListener("resize", () => snap && drawSpark(snap.load.series.slice(-60)));
+
+initMap();
+renderSize();
+poll();
+setInterval(poll, 250);
+</script>
+</body>
+</html>

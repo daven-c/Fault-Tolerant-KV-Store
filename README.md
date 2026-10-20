@@ -55,6 +55,26 @@ The demo exits non-zero if any guarantee is violated, so it doubles as an end-to
 
 ---
 
+## 🕹 Interactive Dashboard
+
+A local web UI for poking at a real cluster:
+
+```bash
+python3 dashboard/server.py        # builds the server and opens http://localhost:8090
+```
+
+![Dashboard: a 5-node cluster map with a leader, followers, one node down, the console and the event log](docs/dashboard.png)
+
+-   **Cluster map**: every node is a dot, coloured and labelled by role (leader, follower, candidate, paused, down), with its term, log length and an applied-entries ring. The leader's link to each follower shows how many entries that follower is behind, and moving dots show entries being replicated and votes being requested, derived from each node's real state.
+-   **Node controls**: click a node to kill it (`SIGKILL`), restart it, or pause/resume it (`SIGSTOP`/`SIGCONT`, a hung server that keeps its sockets open). Rebuild the cluster with 1–7 nodes.
+-   **Console**: send `SET`/`GET`/`DEL`/`KEYS` to the cluster (auto-routed to the leader, with any redirects shown) or to one specific node to see `NOT_LEADER` replies.
+-   **Load generator**: up to 64 closed-loop clients with a live throughput chart and p50/p99 latency, so you can watch what a leader crash does to traffic.
+-   **Event log**: elections, leader changes, kills, restarts and pauses as they happen.
+
+Nodes report their state through a `STATUS` command that each server answers locally (it is not replicated). Raft's peer list is fixed at startup, so changing the cluster size rebuilds the cluster rather than adding a node to a running one.
+
+---
+
 ## 🏗 Architecture Overview
 
 The system is built as a cluster of identical server nodes. At any given time, one node is elected as the **Leader**, and all others are **Followers**.
