@@ -80,6 +80,8 @@ private:
     boost::asio::steady_timer heartbeat_timer_;
     std::mutex mutex_;
 
+    static constexpr size_t kMaxEntriesPerAppend = 2048;
+
     // Idle RPC connections per peer, reused instead of reconnecting for every RPC.
     static constexpr size_t kMaxIdleConnectionsPerPeer = 4;
     std::map<std::string, std::vector<std::shared_ptr<boost::asio::ip::tcp::socket>>> idle_connections_;

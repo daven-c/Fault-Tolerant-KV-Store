@@ -235,7 +235,9 @@ void RaftNode::send_append_entries(int peer_index) {
     std::stringstream rpc;
     rpc << "AppendEntries " << current_term_ << " " << id_ << " " << prev_log_index << " " << prev_log_term << " " << commit_index_;
 
-    size_t entries_to_send = log_.size() - next_index_[peer_index];
+    // Cap the batch: a follower far behind (e.g. after a restart) gets a stream of bounded RPCs
+    // rather than one huge message that outlasts its election timeout and triggers an election.
+    size_t entries_to_send = std::min(log_.size() - next_index_[peer_index], kMaxEntriesPerAppend);
     for (size_t i = 0; i < entries_to_send; ++i) {
         const auto& entry = log_[next_index_[peer_index] + i];
         // We add a separator character (\x01) to properly handle commands with spaces.
