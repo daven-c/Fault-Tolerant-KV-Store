@@ -2,6 +2,10 @@
 
 This project is a from-scratch implementation of a fault-tolerant, distributed key-value store in C++. It is designed to be highly available and resilient to node failures, achieving data consistency across a replicated cluster via the Raft consensus algorithm. It is conceptually similar to core infrastructure components like Redis or etcd.
 
+![Live demo: leader election, a leader crash under load with zero lost writes, quorum loss, and recovery on a 5-node cluster](docs/demo.gif)
+
+<sub>A real, unedited run of [`bench/demo.py`](bench/demo.py) on a 5-node cluster ([MP4](docs/demo.mp4) · [asciinema recording](docs/demo.cast)).</sub>
+
 ---
 
 ## 🚀 Features
@@ -38,22 +42,14 @@ python3 bench/demo.py            # add --pace 0 to skip the pauses, --nodes 3 fo
 | 7. Losing quorum safely | With 3 of 5 down, the leader refuses to acknowledge writes |
 | 8. Recovery | Crashed nodes restart, quorum returns, and all replicas converge to identical state |
 
-Example output:
+The recording at the top of this README is a real run of this script. To regenerate it
+(requires `asciinema`, `agg` and `ffmpeg`):
 
-```text
-[5/8] Leader crash under load
-    16 writers keep writing unique keys while the leader is killed with SIGKILL.
-    ↯ killed node 3 (127.0.0.1:19003) after 6,138 acknowledged writes
-    ✓ node 2 (127.0.0.1:19002) took over; writes resumed after 360 ms
-    cluster: 0:follower  1:follower  2:LEADER  3:down  4:follower
-    ✓ audit: all 10,744 acknowledged writes present on the new leader — none lost
-
-[7/8] Losing quorum safely
-    With a majority down, the leader must not acknowledge writes — it can't guarantee durability.
-    ↯ killed node 1 (127.0.0.1:19001)
-    cluster: 0:down  1:down  2:LEADER  3:down  4:follower
-    ✓ only 2/5 nodes up: write NOT acknowledged after 2 s (correct)
+```bash
+./docs/record-demo.sh
 ```
+
+The script refuses to render a run in which any guarantee was violated.
 
 The demo exits non-zero if any guarantee is violated, so it doubles as an end-to-end smoke test.
 
