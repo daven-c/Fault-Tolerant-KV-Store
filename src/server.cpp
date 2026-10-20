@@ -37,7 +37,9 @@ private:
                     std::string first_word;
                     ss >> first_word;
                     
-                    if (first_word == "RequestVote" || first_word == "AppendEntries") {
+                    if (first_word == "STATUS") {
+                        do_write(raft_node_->status_json(), true);
+                    } else if (first_word == "RequestVote" || first_word == "AppendEntries") {
                         std::string response = raft_node_->handle_rpc(line + "\n");
                         // Keep the connection open: the leader reuses it for later RPCs.
                         do_write(response, true);

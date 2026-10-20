@@ -65,6 +65,11 @@ void KeyValueStore::load_from_aof() {
     std::cout << "Replayed " << commands_replayed << " commands from AOF." << std::endl;
 }
 
+size_t KeyValueStore::size() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return store_.size();
+}
+
 std::string KeyValueStore::apply_command(const std::string& command) {
     std::lock_guard<std::mutex> lock(mutex_);
     

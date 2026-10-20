@@ -30,6 +30,8 @@ public:
     void stop();
     void submit_command(const std::string& command, std::function<void(const std::string&)> callback);
     std::string handle_rpc(const std::string& request);
+    // One-line JSON snapshot of this node's Raft state, answered locally (not replicated).
+    std::string status_json();
 
 private:
     void reset_election_timer();

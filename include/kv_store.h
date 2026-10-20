@@ -13,6 +13,7 @@ public:
     // Applies a command to the in-memory store AND logs it to the AOF.
     // This is the single entry point for changing state.
     std::string apply_command(const std::string& command);
+    size_t size();
 
 private:
     void load_from_aof();

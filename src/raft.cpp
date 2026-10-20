@@ -444,6 +444,26 @@ std::string RaftNode::handle_rpc(const std::string& request) {
     return "UnknownRPC\n";
 }
 
+std::string RaftNode::status_json() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const char* state = state_ == RaftState::Leader ? "leader"
+                      : state_ == RaftState::Candidate ? "candidate" : "follower";
+    std::stringstream out;
+    out << "{\"id\":" << id_ << ",\"state\":\"" << state << "\",\"term\":" << current_term_
+        << ",\"voted_for\":" << voted_for_ << ",\"leader\":" << current_leader_id_
+        << ",\"log\":" << log_.size() - 1 << ",\"last_log_term\":" << log_.back().term
+        << ",\"commit\":" << commit_index_ << ",\"applied\":" << last_applied_
+        << ",\"keys\":" << kv_store_.size() << ",\"match\":[";
+    if (state_ == RaftState::Leader) {
+        for (size_t i = 0; i < match_index_.size(); ++i) {
+            if (i) out << ",";
+            out << (i == (size_t)id_ ? (int)log_.size() - 1 : match_index_[i]);
+        }
+    }
+    out << "]}\n";
+    return out.str();
+}
+
 void RaftNode::submit_command(const std::string& command, std::function<void(const std::string&)> callback) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (state_ != RaftState::Leader) {
