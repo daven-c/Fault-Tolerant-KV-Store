@@ -18,6 +18,47 @@ This project is a from-scratch implementation of a fault-tolerant, distributed k
 
 ---
 
+## 🎬 Live Demo
+
+Once the project builds (see [Build Instructions](#️-build-instructions)), one command launches a real
+5-node cluster on localhost and walks through it in about a minute:
+
+```bash
+python3 bench/demo.py            # add --pace 0 to skip the pauses, --nodes 3 for a smaller cluster
+```
+
+| Step | What you see |
+|---|---|
+| 1. Leader election | Nodes campaign and a leader is elected (~350 ms) |
+| 2. Client redirection | A follower answers `NOT_LEADER <addr>`; the client follows it to the leader |
+| 3. Replication | A committed write appears in every node's AOF |
+| 4. Throughput | Live ops/s bar for 32 concurrent clients, then p50/p99 latency |
+| 5. Leader crash under load | Leader `SIGKILL`ed mid-write; new leader in ~350 ms; audit finds zero lost acknowledged writes |
+| 6. Minority failure | With 2 of 5 nodes down, writes still commit |
+| 7. Losing quorum safely | With 3 of 5 down, the leader refuses to acknowledge writes |
+| 8. Recovery | Crashed nodes restart, quorum returns, and all replicas converge to identical state |
+
+Example output:
+
+```text
+[5/8] Leader crash under load
+    16 writers keep writing unique keys while the leader is killed with SIGKILL.
+    ↯ killed node 3 (127.0.0.1:19003) after 6,138 acknowledged writes
+    ✓ node 2 (127.0.0.1:19002) took over; writes resumed after 360 ms
+    cluster: 0:follower  1:follower  2:LEADER  3:down  4:follower
+    ✓ audit: all 10,744 acknowledged writes present on the new leader — none lost
+
+[7/8] Losing quorum safely
+    With a majority down, the leader must not acknowledge writes — it can't guarantee durability.
+    ↯ killed node 1 (127.0.0.1:19001)
+    cluster: 0:down  1:down  2:LEADER  3:down  4:follower
+    ✓ only 2/5 nodes up: write NOT acknowledged after 2 s (correct)
+```
+
+The demo exits non-zero if any guarantee is violated, so it doubles as an end-to-end smoke test.
+
+---
+
 ## 🏗 Architecture Overview
 
 The system is built as a cluster of identical server nodes. At any given time, one node is elected as the **Leader**, and all others are **Followers**.
