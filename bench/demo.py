@@ -278,6 +278,7 @@ def main() -> None:
     ap.add_argument("--pace", type=float, default=1.0, help="seconds to pause between steps (default 1)")
     ap.add_argument("--bin", help="use an already-built server binary")
     ap.add_argument("--base-port", type=int, default=19000)
+    ap.add_argument("--keep-logs", action="store_true", help="keep node logs and state files for inspection")
     args = ap.parse_args()
     if args.nodes < 3:
         sys.exit("the demo needs at least 3 nodes")
@@ -295,7 +296,10 @@ def main() -> None:
         passed = asyncio.run(run(cluster, args.pace))
     finally:
         cluster.stop()
-        shutil.rmtree(workdir, ignore_errors=True)
+        if args.keep_logs:
+            print(dim(f"Node logs and state files kept in {workdir}"))
+        else:
+            shutil.rmtree(workdir, ignore_errors=True)
 
     print()
     print(bold(green("Demo complete: every guarantee held.")) if passed

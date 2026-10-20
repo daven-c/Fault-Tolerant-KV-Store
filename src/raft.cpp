@@ -179,7 +179,12 @@ void RaftNode::become_leader() {
     std::cout << "[Node " << id_ << "] Became LEADER for term " << current_term_ << "!" << std::endl;
     election_timer_.cancel();
 
-    next_index_.assign(peer_addresses_.size(), log_.size());
+    // A leader may only commit entries from earlier terms indirectly, by committing one from its
+    // own term (Raft §5.4.2). Append a no-op so they commit now, not on the next client write.
+    log_.push_back({current_term_, ""});
+    persist_entries(log_.size() - 1);
+
+    next_index_.assign(peer_addresses_.size(), log_.size() - 1);
     match_index_.assign(peer_addresses_.size(), 0);
     append_in_flight_.assign(peer_addresses_.size(), false);
     append_sent_at_.assign(peer_addresses_.size(), std::chrono::steady_clock::time_point{});
@@ -307,6 +312,7 @@ void RaftNode::advance_commit_index() {
         while (last_applied_ < commit_index_) {
             last_applied_++;
             const auto& entry = log_[last_applied_];
+            if (entry.command.empty()) continue; // leader no-op
             std::string result = kv_store_.apply_command(entry.command);
 
             if (client_callbacks_.count(last_applied_)) {
@@ -427,6 +433,7 @@ std::string RaftNode::handle_rpc(const std::string& request) {
         if (last_applied_ < commit_index_) {
             while (last_applied_ < commit_index_) {
                 last_applied_++;
+                if (log_[last_applied_].command.empty()) continue; // leader no-op
                 kv_store_.apply_command(log_[last_applied_].command);
             }
             persist_applied();

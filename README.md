@@ -260,12 +260,14 @@ intermediate step has its own result file in `bench/results/`.
 -   A restarted node catches up, and liveness returns when quorum is restored.
 -   A stale, shorter `AppendEntries` delivered after a longer one never truncates a follower's log.
 -   A node never grants two votes in the same term, even across a crash and restart.
+-   After a leader change with no further client traffic, every acknowledged write is still applied on all survivors.
 
 Bugs found and fixed with the harness:
 
 -   After a successful `AppendEntries`, the leader credited the follower with its *entire current* log, including entries appended after the request was sent. Under load this caused replica divergence and failover outages of several seconds.
 -   Followers truncated their log on every `AppendEntries`, so a delayed RPC could delete entries the leader had counted as replicated ([#2](https://github.com/daven-c/Fault-Tolerant-KV-Store/issues/2)).
 -   Raft term, vote and log weren't persisted, so a restarted node could vote twice in one term ([#1](https://github.com/daven-c/Fault-Tolerant-KV-Store/issues/1)).
+-   A new leader never appended an entry of its own term, so it couldn't commit entries from earlier terms until the next client write; replicas stayed stale while the cluster was idle. Leaders now start their term with a no-op entry (Raft §8). Found by the live demo.
 
 See [bench/README.md](bench/README.md) for scenarios and options.
 

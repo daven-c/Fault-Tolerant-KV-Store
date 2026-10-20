@@ -362,5 +362,31 @@ async def raft_rpc(env: Env) -> dict:
     }
 
 
+# --------------------------------------------------------------------------------------------
+# Idle leader change: kill the leader right after a write is acknowledged and send no further
+# traffic. The new leader must still get every acknowledged write applied on all survivors.
+# --------------------------------------------------------------------------------------------
+
+async def idle_leader_change(env: Env) -> dict:
+    trials, applied_ms = 3 if env.quick else 5, []
+    for trial in range(trials):
+        cluster = env.cluster("idle-leader-change")
+        with cluster:
+            leader = await find_leader(cluster.addrs, cluster.alive())
+            client = KVClient(cluster.addrs, start=leader)
+            for i in range(20):
+                await client.execute(f"SET idle:{i} t{trial}", time.monotonic() + 5)
+            client.close()
+            cluster.kill_node(leader)  # immediately after the last acknowledgement
+            survivors = cluster.alive()
+            ms = await _wait_until(
+                lambda: all(cluster.aof_state(i).get("idle:19") == f"t{trial}" for i in survivors),
+                timeout=5.0)
+            applied_ms.append(ms)
+    done = [m for m in applied_ms if m is not None]
+    return {"trials": trials, "applied_everywhere": len(done), "applied_ms": summarize(done),
+            "timeout_s": 5.0}
+
+
 SCENARIOS = {"election": election, "throughput": throughput, "failover": failover, "quorum": quorum,
-             "raft_rpc": raft_rpc}
+             "raft_rpc": raft_rpc, "idle_leader_change": idle_leader_change}

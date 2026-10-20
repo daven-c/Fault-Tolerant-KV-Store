@@ -91,6 +91,10 @@ def checks(result: dict) -> list[dict]:
     add("At most one vote per term across restarts", "raft_rpc",
         r.get("first_vote_granted") and r.get("second_vote_after_restart_denied"),
         f"after restart: {r.get('replies', {}).get('second_vote')}")
+    il = s.get("idle_leader_change", {})
+    add("Acked writes applied everywhere after an idle leader change", "idle_leader_change",
+        il.get("applied_everywhere") == il.get("trials"),
+        f"{il.get('applied_everywhere')}/{il.get('trials')} trial(s) within {il.get('timeout_s')}s, no client traffic")
     return out
 
 
