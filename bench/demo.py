@@ -184,6 +184,8 @@ async def run(cluster: Cluster, pace: float) -> bool:
 
     writers = [asyncio.create_task(writer(w)) for w in range(16)]
     await asyncio.sleep(1.0)
+    # Leadership can change under heavy load, so look it up right before the kill.
+    leader = await find_leader(addrs, cluster.alive())
     before = len(acked)
     killed = leader
     t_kill = time.monotonic()
@@ -192,6 +194,9 @@ async def run(cluster: Cluster, pace: float) -> bool:
     await KVClient(addrs, request_timeout=0.3, start=(killed + 1) % n).execute("SET __probe__ 1", t_kill + 30)
     outage = (time.monotonic() - t_kill) * 1000
     leader = await find_leader(addrs, cluster.alive())
+    if leader == killed:
+        all_good = False
+        bad("the killed node is still answering as leader")
     ok(f"{d.name(leader)} took over; writes resumed after {outage:.0f} ms")
     await asyncio.sleep(1.0)
     stop.set()
