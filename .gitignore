@@ -54,3 +54,7 @@ build/
 bench/.cache/
 __pycache__/
 *.raft
+
+# Demo recorder
+docs/demo-recorder/node_modules/
+docs/demo-recorder/demo-out/

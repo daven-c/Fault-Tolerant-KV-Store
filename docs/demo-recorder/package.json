@@ -1,0 +1,12 @@
+{
+  "name": "kv-store-demo-recorder",
+  "private": true,
+  "type": "module",
+  "description": "Records the dashboard demo (docs/demo.mp4, docs/demo.gif, docs/tour.html). See docs/DEMO.md.",
+  "scripts": {
+    "record": "node record-demo.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

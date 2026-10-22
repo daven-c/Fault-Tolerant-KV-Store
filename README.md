@@ -2,9 +2,9 @@
 
 This project is a from-scratch implementation of a fault-tolerant, distributed key-value store in C++. It is designed to be highly available and resilient to node failures, achieving data consistency across a replicated cluster via the Raft consensus algorithm. It is conceptually similar to core infrastructure components like Redis or etcd.
 
-![Live demo: leader election, a leader crash under load with zero lost writes, quorum loss, and recovery on a 5-node cluster](docs/demo.gif)
+![Dashboard demo: a 5-node cluster under load loses its leader, a node is paused, quorum is lost and a write is refused, then the nodes restart and the first write reads back intact](docs/demo.gif)
 
-<sub>A real, unedited run of [`bench/demo.py`](bench/demo.py) on a 5-node cluster ([MP4](docs/demo.mp4) · [asciinema recording](docs/demo.cast)).</sub>
+<sub>A real, unedited session with the [interactive dashboard](#-interactive-dashboard) on a 5-node cluster ([MP4](docs/demo.mp4) · [click-through tour](https://davenc.dev/resources/other/kv-store-tour.html) · [how it's recorded](docs/DEMO.md)).</sub>
 
 ---
 
@@ -24,8 +24,13 @@ This project is a from-scratch implementation of a fault-tolerant, distributed k
 
 ## 🎬 Live Demo
 
-Once the project builds (see [Build Instructions](#️-build-instructions)), one command launches a real
-5-node cluster on localhost and walks through it in about a minute:
+The recording at the top of this README is the [interactive dashboard](#-interactive-dashboard),
+driven by a Playwright script against a real cluster; [docs/DEMO.md](docs/DEMO.md) explains how to
+re-record it.
+
+There's also a narrated terminal walkthrough. Once the project builds (see
+[Build Instructions](#️-build-instructions)), one command launches a real 5-node cluster on
+localhost and walks through it in about a minute:
 
 ```bash
 python3 bench/demo.py            # add --pace 0 to skip the pauses, --nodes 3 for a smaller cluster
@@ -42,14 +47,10 @@ python3 bench/demo.py            # add --pace 0 to skip the pauses, --nodes 3 fo
 | 7. Losing quorum safely | With 3 of 5 down, the leader refuses to acknowledge writes |
 | 8. Recovery | Crashed nodes restart, quorum returns, and all replicas converge to identical state |
 
-The recording at the top of this README is a real run of this script. To regenerate it
-(requires `asciinema`, `agg` and `ffmpeg`):
-
-```bash
-./docs/record-demo.sh
-```
-
-The script refuses to render a run in which any guarantee was violated.
+A recording of it is in [docs/terminal-demo.gif](docs/terminal-demo.gif)
+([MP4](docs/terminal-demo.mp4) · [asciinema](docs/terminal-demo.cast)). To regenerate it (requires
+`asciinema`, `agg` and `ffmpeg`), run `./docs/record-terminal-demo.sh`; it refuses to render a run
+in which any guarantee was violated.
 
 The demo exits non-zero if any guarantee is violated, so it doubles as an end-to-end smoke test.
 
