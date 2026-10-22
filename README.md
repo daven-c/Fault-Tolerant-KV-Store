@@ -13,10 +13,10 @@ This project is a from-scratch implementation of a fault-tolerant, distributed k
 -   **Distributed Consensus**: Uses the Raft algorithm for leader election and replicated log management to ensure data consistency.
 -   **Fault Tolerance**: The cluster can tolerate failures of minority nodes and continue to serve requests.
 -   **Automated Cluster Launching**: Includes a powerful script to build, clean, and launch a multi-node cluster in separate, customizable terminal windows.
--   **Persistence**: Each node keeps its key/value state in an Append-Only File (AOF) and its Raft term, vote and log in a separate fsync'd state file (`AOFs/node_<id>.raft`), so a restarted node keeps its promises (at most one vote per term) and only re-fetches entries it is missing. On macOS `fsync` does not flush the drive's own cache, so this protects against process crashes but not necessarily power loss.
+-   **Persistence**: Each node keeps its key/value state in an Append-Only File (AOF) and its Raft term, vote and log in a separate fsync'd state file (`AOFs/node_<id>.raft`), written by one background thread in batches (group commit) so a slow disk never stalls heartbeats or replication. A restarted node keeps its promises (at most one vote per term) and only re-fetches entries it is missing. On macOS `fsync` does not flush the drive's own cache, so this protects against process crashes but not necessarily power loss.
 -   **Concurrent & Asynchronous Networking**: Built on a multi-threaded, event-driven server architecture using Boost.Asio to handle many simultaneous client connections efficiently.
 -   **Modern C++**: Utilizes C++20 features, including concurrency primitives and coroutines for clean, modern asynchronous code.
--   **Low-Latency Replication**: New entries are replicated as soon as they arrive (not on the next heartbeat), batched with one in-flight request per follower over reused TCP connections. Median write latency is about 0.3 ms on a local 3-node cluster.
+-   **Low-Latency Replication**: New entries are replicated as soon as they arrive (not on the next heartbeat), batched with one in-flight request per follower over reused TCP connections. Median write latency is about 0.2 ms on a local 3-node cluster.
 -   **Fast Follower Recovery**: Followers report where their log diverges, so a restarted node catches up on thousands of entries in about a second.
 -   **Verified by a Fault-Injection Harness**: A reproducible benchmark suite kills leaders under load and checks durability, replica convergence, and quorum safety on every run (see [Benchmarks](#-benchmarks--fault-injection)).
 
@@ -253,20 +253,23 @@ python3 bench/harness.py compare bench/results/baseline-bbaeb26.json bench/resul
 ### Results (3-node cluster, localhost, Apple Silicon, 10 CPUs)
 
 Before = original implementation (`bbaeb26`). After = current `main` (replication fixes, immediate
-replication, fast log repair, durable Raft state, pooled RPC connections), as a range over two
-full runs. Full tables are in [bench/results/COMPARISON.md](bench/results/COMPARISON.md); every
+replication, fast log repair, durable Raft state, pooled RPC connections, group commit), as a
+range over two full runs. Full tables are in [bench/results/COMPARISON.md](bench/results/COMPARISON.md); every
 intermediate step has its own result file in `bench/results/`.
 
 | Metric | Before | After |
 |---|---:|---:|
-| Write latency, single client, p50 | 150.8 ms | 0.3 ms |
-| Write latency, single client, p99 | 296.9 ms | 1.0–1.5 ms |
-| Peak throughput (64 clients, 50/50 SET/GET) | 410 ops/s | 9,202–13,276 ops/s |
-| p99 latency at 64 clients | 158 ms | 12–20 ms |
-| Leader-failover outage, median | 474 ms | 376–388 ms |
-| Leader-failover outage, worst trial | 5,666 ms | 1,106–1,849 ms |
-| Restarted-node catch-up, median | did not finish within 20 s (5 of 5 trials) | 0.46–0.57 s for ~15,000 entries |
-| Acknowledged writes lost across leader crashes | 0 | 0 (of 138,000+ verified) |
+| Write latency, single client, p50 | 150.8 ms | 0.2 ms |
+| Write latency, single client, p99 | 296.9 ms | 0.3 ms |
+| Peak throughput (64 clients, 50/50 SET/GET) | 410 ops/s | 26,730–28,273 ops/s* |
+| p99 latency at 64 clients | 158 ms | 4.4–4.6 ms |
+| Leader-failover outage, median | 474 ms | 375–459 ms |
+| Leader-failover outage, worst trial | 5,666 ms | 746–858 ms |
+| Restarted-node catch-up, median | did not finish within 20 s (5 of 5 trials) | 0.18 s |
+| Acknowledged writes lost across leader crashes | 0 | 0 (of 694,000+ verified) |
+
+<sub>* The Python load generator was at ~90% CPU at this level, so this is a lower bound on what the
+server can do.</sub>
 
 ### Correctness checks (all passing)
 
@@ -278,6 +281,7 @@ intermediate step has its own result file in `bench/results/`.
 -   A stale, shorter `AppendEntries` delivered after a longer one never truncates a follower's log.
 -   A node never grants two votes in the same term, even across a crash and restart.
 -   After a leader change with no further client traffic, every acknowledged write is still applied on all survivors.
+-   A late vote from an earlier election never counts towards the current one.
 
 Bugs found and fixed with the harness:
 
@@ -285,6 +289,9 @@ Bugs found and fixed with the harness:
 -   Followers truncated their log on every `AppendEntries`, so a delayed RPC could delete entries the leader had counted as replicated ([#2](https://github.com/daven-c/Fault-Tolerant-KV-Store/issues/2)).
 -   Raft term, vote and log weren't persisted, so a restarted node could vote twice in one term ([#1](https://github.com/daven-c/Fault-Tolerant-KV-Store/issues/1)).
 -   A new leader never appended an entry of its own term, so it couldn't commit entries from earlier terms until the next client write; replicas stayed stale while the cluster was idle. Leaders now start their term with a no-op entry (Raft §8). Found by the live demo.
+-   A candidate counted vote replies from earlier elections, so a late "yes" could make it leader of the current term without a majority, allowing two leaders at once.
+-   Every disk write (fsync of the Raft state, AOF appends) happened under the node's main lock, so one slow disk operation on the leader froze heartbeats and triggered elections under steady load: 0–7 per 40 s run ([#4](https://github.com/daven-c/Fault-Tolerant-KV-Store/issues/4)). A single writer thread now group-commits batches off the lock, replies wait on durability without blocking a thread, and the leader replicates while its own write is in flight. Result: 0 elections in 6 runs, and about 2× the throughput. Found while recording the dashboard demo.
+-   An election timer that fired while the node was busy could start an election just after a heartbeat had reset it.
 
 See [bench/README.md](bench/README.md) for scenarios and options.
 
@@ -292,7 +299,7 @@ See [bench/README.md](bench/README.md) for scenarios and options.
 
 -   No log compaction or snapshots: the Raft state file and AOF grow without bound.
 -   On macOS, `fsync` does not flush the drive's write cache, so durability covers process crashes but not necessarily power loss (`F_FULLFSYNC` would, at a large latency cost).
--   Failover usually completes in about 0.4 s, but roughly one trial in five or ten takes 1–2 s.
+-   No PreVote: a node returning from a pause or partition can raise the term and briefly disrupt a healthy leader.
 -   RPCs have no timeout, so a peer that accepts connections but never replies can hold an RPC indefinitely.
 
 ---
