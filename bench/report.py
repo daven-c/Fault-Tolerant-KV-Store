@@ -91,6 +91,10 @@ def checks(result: dict) -> list[dict]:
     add("At most one vote per term across restarts", "raft_rpc",
         r.get("first_vote_granted") and r.get("second_vote_after_restart_denied"),
         f"after restart: {r.get('replies', {}).get('second_vote')}")
+    sv = s.get("stale_vote", {})
+    add("Late votes from an earlier election are ignored", "stale_vote",
+        sv.get("became_leader_from_stale_vote") is False,
+        f"grant for term {sv.get('late_grant_term')} arrived in term {sv.get('node_term_after')}; node is {sv.get('node_state_after')}")
     il = s.get("idle_leader_change", {})
     add("Acked writes applied everywhere after an idle leader change", "idle_leader_change",
         il.get("applied_everywhere") == il.get("trials"),

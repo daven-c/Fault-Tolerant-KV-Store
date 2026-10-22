@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import json
 import math
 import random
 import time
@@ -388,5 +389,55 @@ async def idle_leader_change(env: Env) -> dict:
             "timeout_s": 5.0}
 
 
+# --------------------------------------------------------------------------------------------
+# Stale vote: the harness plays both peers of a lone node. Peer 1 holds the node's first
+# RequestVote and answers it "VoteGranted" only after the node has moved on to a newer election
+# in which nobody votes for it. Counting that late grant would make it leader without a majority.
+# --------------------------------------------------------------------------------------------
+
+async def stale_vote(env: Env) -> dict:
+    cluster = env.cluster("stale-vote")
+    cluster.workdir.mkdir(parents=True, exist_ok=True)
+    first_term: list[int] = []
+    newer_election = asyncio.Event()
+
+    async def peer(reader, writer, holds_first: bool) -> None:
+        try:
+            while line := await reader.readline():
+                parts = line.decode().split()
+                term = int(parts[1]) if len(parts) > 1 and parts[1].lstrip("-").isdigit() else 0
+                if parts[0] == "RequestVote" and holds_first and not first_term:
+                    first_term.append(term)
+                    await newer_election.wait()
+                    writer.write(f"VoteGranted {term}\n".encode())
+                else:
+                    if parts[0] == "RequestVote" and first_term and term > first_term[0]:
+                        newer_election.set()
+                    reply = "VoteDenied" if parts[0] == "RequestVote" else "Fail"
+                    writer.write(f"{reply} {term}\n".encode())
+                await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            writer.close()
+
+    servers = [await asyncio.start_server(lambda r, w, h=(i == 1): peer(r, w, h), "127.0.0.1", env.base_port + i)
+               for i in (1, 2)]
+    try:
+        cluster.start_node(0)
+        await asyncio.wait_for(newer_election.wait(), timeout=10)
+        await asyncio.sleep(1.0)  # let the late grant arrive and be processed
+        c = KVClient(cluster.addrs, start=0)
+        status = json.loads(await c.call_once("STATUS"))
+        c.close()
+    finally:
+        cluster.stop()
+        for s in servers:
+            s.close()
+    return {"late_grant_term": first_term[0] if first_term else None,
+            "node_state_after": status["state"], "node_term_after": status["term"],
+            "became_leader_from_stale_vote": status["state"] == "leader"}
+
+
 SCENARIOS = {"election": election, "throughput": throughput, "failover": failover, "quorum": quorum,
-             "raft_rpc": raft_rpc, "idle_leader_change": idle_leader_change}
+             "raft_rpc": raft_rpc, "idle_leader_change": idle_leader_change, "stale_vote": stale_vote}

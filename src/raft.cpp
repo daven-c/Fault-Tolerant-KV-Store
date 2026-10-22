@@ -148,7 +148,7 @@ void RaftNode::start_election() {
         std::stringstream rpc;
         rpc << "RequestVote " << current_term_ << " " << id_ << " " << (log_.size() - 1) << " " << log_.back().term << "\n";
         
-        send_rpc(peer_addresses_[i], rpc.str(), [this, self = shared_from_this()](const std::string& res) {
+        send_rpc(peer_addresses_[i], rpc.str(), [this, self = shared_from_this(), election_term = current_term_](const std::string& res) {
             std::lock_guard<std::mutex> lock(mutex_);
             if (state_ != RaftState::Candidate) return;
 
@@ -163,6 +163,9 @@ void RaftNode::start_election() {
                 step_down(term);
                 return;
             }
+
+            // A late reply from an earlier election must not count towards this one.
+            if (current_term_ != election_term || term != election_term) return;
 
             if (result == "VoteGranted") {
                 votes_received_++;
