@@ -106,8 +106,32 @@
     max-width: 1440px; margin: 0 auto;
   }
   @media (max-width: 920px) { main { grid-template-columns: minmax(0, 1fr); padding: 12px 16px 20px; } }
+  /* Desktop: fit the viewport so the map, the load chart and the controls are visible together.
+     The map takes whatever height is left; the right column scrolls on its own. */
+  @media (min-width: 921px) and (min-height: 620px) {
+    body { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    main { flex: 1; min-height: 0; width: 100%; }
+    .col { min-height: 0; }
+    .col:first-child > .map-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .col:first-child > .map-wrap #map { flex: 1; min-height: 0; height: 100%; max-height: none; aspect-ratio: auto; }
+    .col:first-child > .panel:not(.map-wrap) { flex: none; }
+    .col:last-child { overflow: hidden; }
+    /* the console takes the column's spare height, so its newest reply is always on screen */
+    .col:last-child > .panel:nth-child(2) { flex: 1; min-height: 160px; display: flex; flex-direction: column; }
+    .col:last-child > .panel:nth-child(2) > .panel-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .col:last-child #history { flex: 1; min-height: 0; max-height: none; }
+    .col:last-child > .panel:nth-child(3) { flex: none; }
+    .col:last-child #events { max-height: 112px; }
+    .load-body { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 24px; align-items: center; }
+    .load-body .load-row { flex-direction: column; align-items: flex-start; gap: 6px; margin: 0; }
+    .load-body .load-row .stat { flex-direction: row; align-items: baseline; gap: 8px; }
+    .load-body .big { font-size: 20px; }
+    .load-body .load-note { grid-column: 2; margin: 0 !important; }
+    #spark { height: 104px; }
+  }
   .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
   .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); min-width: 0; }
+  .h2-sub { text-transform: none; letter-spacing: 0; font-weight: 450; }
   .panel > h2 {
     margin: 0; padding: 12px 16px 0; font-size: 12px; font-weight: 600; letter-spacing: .06em;
     text-transform: uppercase; color: var(--text-3);
@@ -217,7 +241,7 @@
   <div class="col">
     <section class="panel map-wrap" aria-labelledby="map-title">
       <div class="map-head"><h2 id="map-title">Cluster map</h2><span class="hint">Click a node to inspect, kill, pause or restart it</span></div>
-      <svg id="map" viewBox="-320 -300 640 600" role="img" aria-label="Cluster topology"></svg>
+      <svg id="map" viewBox="-235 -215 470 470" role="img" aria-label="Cluster topology"></svg>
       <div class="legend" aria-label="Legend">
         <span><i style="background:var(--st-leader)"></i>★ Leader</span>
         <span><i style="background:var(--st-follower)"></i>● Follower</span>
@@ -229,8 +253,8 @@
     </section>
 
     <section class="panel" aria-labelledby="load-title">
-      <h2 id="load-title">Load generator</h2>
-      <div class="panel-body">
+      <h2 id="load-title">Load generator <span class="h2-sub">· closed-loop clients, 50/50 SET/GET against the leader</span></h2>
+      <div class="panel-body load-body">
         <div class="load-row">
           <label>Clients <input type="range" id="load" min="0" max="64" step="1" value="0" aria-describedby="load-val"><output id="load-val" class="mono">0</output></label>
           <div class="stat"><span>Throughput (last second)</span><div class="big" id="ops">0<small>ops/s</small></div></div>
@@ -241,7 +265,7 @@
           <svg id="spark" role="img" aria-label="Throughput over the last 60 seconds"></svg>
           <div class="tooltip" id="spark-tip"></div>
         </div>
-        <p class="muted" style="margin:6px 0 0;font-size:12px">Closed-loop clients doing 50/50 SET/GET against the current leader. Throughput, ops/s, last 60 s.</p>
+        <p class="muted load-note" style="margin:6px 0 0;font-size:12px">Throughput, ops/s, last 60 s.</p>
       </div>
     </section>
   </div>
@@ -323,16 +347,31 @@ function el(tag, attrs = {}, parent) {
   if (parent) parent.appendChild(e);
   return e;
 }
+// The drawing is sized to its box (a fixed height in SVG units, width from the box's aspect), and
+// the nodes sit on an ellipse that uses the spare width, so a wide, short map isn't mostly empty.
+const MAP_H = 470, MAP_TOP = -215;
+let mapAspect = 0;
+function fitMap() {
+  const r = $("#map").getBoundingClientRect();
+  const aspect = r.width && r.height ? r.width / r.height : 1;
+  if (Math.abs(aspect - mapAspect) < 0.01) return false;
+  mapAspect = aspect;
+  const w = MAP_H * aspect;
+  $("#map").setAttribute("viewBox", `${-w / 2} ${MAP_TOP} ${w} ${MAP_H}`);
+  return true;
+}
 function positions(n) {
   if (n === 1) return [[0, 0]];
-  const r = n <= 3 ? 170 : 205;
+  const ry = n <= 3 ? 130 : 150;
+  const rx = Math.min(Math.max(ry, (MAP_H * (mapAspect || 1)) / 2 - 110), 330);
   return Array.from({ length: n }, (_, i) => {
     const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
-    return [Math.cos(a) * r, Math.sin(a) * r];
+    return [Math.cos(a) * rx, Math.sin(a) * ry];
   });
 }
 function initMap() {
   const svg = $("#map");
+  mapAspect = 0;
   svg.innerHTML = "";
   layer.mesh = el("g", {}, svg);
   layer.spokes = el("g", {}, svg);
@@ -366,6 +405,7 @@ function buildNodes(count, pos) {
   });
 }
 function renderMap(nodes) {
+  if (fitMap()) layer.nodeEls = null;  // box changed shape: lay the nodes out again
   const pos = positions(nodes.length);
   const leader = nodes.find((n) => n.status === "leader");
   const maxLog = Math.max(1, ...nodes.map((n) => n.log || 0));
@@ -595,7 +635,7 @@ function renderLoad(load) {
 }
 function drawSpark(series) {
   const svg = $("#spark");
-  const W = svg.clientWidth || 600, H = 120, padL = 44, padR = 8, padT = 10, padB = 20;
+  const W = svg.clientWidth || 600, H = svg.clientHeight || 120, padL = 44, padR = 8, padT = 10, padB = 20;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   svg.innerHTML = "";
   const max = Math.max(10, ...series.map((d) => d.ops));
@@ -718,7 +758,10 @@ $("#theme").addEventListener("click", () => {
   try { localStorage.setItem("kv-theme", root.dataset.theme); } catch {}
 });
 try { const t = localStorage.getItem("kv-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
-addEventListener("resize", () => snap && drawSpark(snap.load.series.slice(-60)));
+addEventListener("resize", () => { if (snap) { drawSpark(snap.load.series.slice(-60)); if (snap.nodes.length) renderMap(snap.nodes); } });
+
+// Keep the console pinned to its newest reply when the panel resizes (e.g. selecting a node).
+new ResizeObserver(() => { $("#history").scrollTop = 1e9; }).observe($("#history"));
 
 initMap();
 renderSize();
