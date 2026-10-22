@@ -115,11 +115,16 @@ void RaftNode::reset_election_timer() {
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<> distrib(300, 500);
-    election_timer_.expires_after(std::chrono::milliseconds(distrib(gen)));
+    const auto timeout = std::chrono::milliseconds(distrib(gen));
+    election_deadline_ = std::chrono::steady_clock::now() + timeout;
+    election_timer_.expires_after(timeout);
     election_timer_.async_wait([this, self = shared_from_this()](const boost::system::error_code& ec) {
         if (!ec) {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (state_ != RaftState::Leader) {
+            // The timer can fire and queue this handler while another thread holds the mutex
+            // (e.g. handling an AppendEntries); resetting the timer then doesn't cancel it. Only
+            // campaign if no reset has pushed the deadline past now.
+            if (state_ != RaftState::Leader && std::chrono::steady_clock::now() >= election_deadline_) {
                 start_election();
             }
         }

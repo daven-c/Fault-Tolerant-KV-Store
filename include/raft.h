@@ -77,6 +77,7 @@ private:
     std::vector<std::string> peer_addresses_;
     boost::asio::io_context& io_context_;
     boost::asio::steady_timer election_timer_;
+    std::chrono::steady_clock::time_point election_deadline_{};
     boost::asio::steady_timer heartbeat_timer_;
     std::mutex mutex_;
 
