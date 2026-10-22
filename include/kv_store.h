@@ -11,8 +11,10 @@ public:
     explicit KeyValueStore(const std::string& aof_path);
     
     // Applies a command to the in-memory store AND logs it to the AOF.
-    // This is the single entry point for changing state.
-    std::string apply_command(const std::string& command);
+    // This is the single entry point for changing state. If `aof_records` is given, the AOF lines
+    // are appended to it for the caller to write later (with append_to_aof) instead of written now.
+    std::string apply_command(const std::string& command, std::string* aof_records = nullptr);
+    void append_to_aof(const std::string& records);
     size_t size();
 
 private:

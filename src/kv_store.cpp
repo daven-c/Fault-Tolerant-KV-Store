@@ -70,7 +70,12 @@ size_t KeyValueStore::size() {
     return store_.size();
 }
 
-std::string KeyValueStore::apply_command(const std::string& command) {
+void KeyValueStore::append_to_aof(const std::string& records) {
+    std::ofstream aof_file(aof_path_, std::ios::app);
+    aof_file << records;
+}
+
+std::string KeyValueStore::apply_command(const std::string& command, std::string* aof_records) {
     std::lock_guard<std::mutex> lock(mutex_);
     
     std::stringstream ss(command);
@@ -95,8 +100,12 @@ std::string KeyValueStore::apply_command(const std::string& command) {
         
         // Persist to AOF in a canonical, quoted format before applying to memory
         std::string canonical_command = "SET \"" + key + "\" \"" + value + "\"";
-        std::ofstream aof_file(aof_path_, std::ios::app);
-        aof_file << canonical_command << std::endl;
+        if (aof_records) {
+            *aof_records += canonical_command + "\n";
+        } else {
+            std::ofstream aof_file(aof_path_, std::ios::app);
+            aof_file << canonical_command << std::endl;
+        }
 
         store_[key] = value;
         return "OK\n";
@@ -119,8 +128,12 @@ std::string KeyValueStore::apply_command(const std::string& command) {
 
         // Persist to AOF in a canonical, quoted format before applying to memory
         std::string canonical_command = "DEL \"" + key + "\"";
-        std::ofstream aof_file(aof_path_, std::ios::app);
-        aof_file << canonical_command << std::endl;
+        if (aof_records) {
+            *aof_records += canonical_command + "\n";
+        } else {
+            std::ofstream aof_file(aof_path_, std::ios::app);
+            aof_file << canonical_command << std::endl;
+        }
 
         if (store_.erase(key)) {
             return "1\n";

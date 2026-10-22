@@ -32,6 +32,7 @@ RaftNode::RaftNode(int id, const std::vector<std::string>& peer_addresses,
 }
 
 RaftNode::~RaftNode() {
+    stop_persistence();
     if (state_file_) std::fclose(state_file_);
 }
 
@@ -70,44 +71,110 @@ void RaftNode::load_state() {
     }
     // Applied entries were committed, and their effects are already in the AOF.
     last_applied_ = commit_index_ = std::min(applied, (int)log_.size() - 1);
+    queued_log_end_ = durable_log_end_ = (int)log_.size() - 1;
     std::cout << "[Node " << id_ << "] Restored term " << current_term_ << ", vote " << voted_for_
               << ", " << log_.size() - 1 << " log entries, applied through " << last_applied_ << "." << std::endl;
 }
 
-void RaftNode::append_state(const std::string& records, bool durable) {
-    std::fwrite(records.data(), 1, records.size(), state_file_);
-    std::fflush(state_file_);
-    if (durable) ::fsync(fileno(state_file_));
+// These are called WITH THE MUTEX HELD.
+
+uint64_t RaftNode::enqueue_state(const std::string& records) {
+    persist_buf_ += records;
+    persist_cv_.notify_one();
+    return ++queued_seq_;
 }
 
-void RaftNode::persist_term_and_vote() {
+void RaftNode::after_durable(uint64_t seq, std::function<void()> action) {
+    // Runs `action` (with the mutex held) once every record up to `seq` is on disk: right away if
+    // it already is, otherwise from the persistence thread when its batch lands. Actions only post
+    // replies or send RPCs, so nothing ever blocks waiting for the disk.
+    if (durable_seq_ >= seq) {
+        action();
+    } else {
+        after_durable_.emplace(seq, std::move(action));
+    }
+}
+
+uint64_t RaftNode::persist_term_and_vote() {
     // Must be durable before any vote or RPC reply in this term leaves the node.
-    append_state("T " + std::to_string(current_term_) + " " + std::to_string(voted_for_) + "\n", true);
+    return enqueue_state("T " + std::to_string(current_term_) + " " + std::to_string(voted_for_) + "\n");
 }
 
-void RaftNode::persist_entries(size_t from_index) {
+uint64_t RaftNode::persist_entries(size_t from_index) {
     // Must be durable before the entries are acknowledged to the leader (or counted by it).
+    if (from_index >= log_.size()) return queued_seq_;
     std::string records;
     for (size_t i = from_index; i < log_.size(); ++i) {
         records += "E " + std::to_string(i) + " " + std::to_string(log_[i].term) + " " + log_[i].command + "\n";
     }
-    if (!records.empty()) append_state(records, true);
+    // Entries from from_index on are being rewritten, so the copies on disk no longer count.
+    const int kept = (int)from_index - 1;
+    durable_log_end_ = std::min(durable_log_end_, kept);
+    truncated_since_batch_ = std::min(truncated_since_batch_, kept);
+    queued_log_end_ = (int)log_.size() - 1;
+    return enqueue_state(records);
 }
 
 void RaftNode::persist_applied() {
-    // Not fsynced: losing it only means re-applying a suffix of SET/DEL commands on top of a state
-    // that already contains them, which leaves the same final state.
-    append_state("A " + std::to_string(last_applied_) + "\n", false);
+    // Nobody waits for this one: losing it only means re-applying a suffix of SET/DEL commands on
+    // top of a state that already contains them, which leaves the same final state.
+    enqueue_state("A " + std::to_string(last_applied_) + "\n");
+}
+
+void RaftNode::persist_loop() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    while (true) {
+        persist_cv_.wait(lock, [&] { return persist_stop_ || !persist_buf_.empty(); });
+        if (persist_buf_.empty()) return;  // stopping, and everything queued is written
+        std::string batch, aof_batch;
+        batch.swap(persist_buf_);
+        aof_batch.swap(aof_buf_);
+        const uint64_t seq = queued_seq_;
+        const int log_end = queued_log_end_;
+        truncated_since_batch_ = INT_MAX;
+
+        lock.unlock();
+        // The AOF lines go first, so an "applied through N" record never gets ahead of the state
+        // it describes. (Like the A records they aren't fsynced; see persist_applied.)
+        if (!aof_batch.empty()) kv_store_.append_to_aof(aof_batch);
+        std::fwrite(batch.data(), 1, batch.size(), state_file_);
+        std::fflush(state_file_);
+        ::fsync(fileno(state_file_));
+        lock.lock();
+
+        durable_seq_ = seq;
+        // A truncation queued while this batch was being written supersedes part of it.
+        durable_log_end_ = std::min(log_end, truncated_since_batch_);
+        while (!after_durable_.empty() && after_durable_.begin()->first <= durable_seq_) {
+            auto action = std::move(after_durable_.begin()->second);
+            after_durable_.erase(after_durable_.begin());
+            action();
+        }
+        // The leader counts itself towards a majority only for entries on its own disk.
+        if (state_ == RaftState::Leader) advance_commit_index();
+    }
+}
+
+void RaftNode::stop_persistence() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        persist_stop_ = true;
+    }
+    persist_cv_.notify_all();
+    if (persist_thread_.joinable()) persist_thread_.join();
 }
 
 void RaftNode::start() {
     std::cout << "[Node " << id_ << "] Starting." << std::endl;
+    persist_thread_ = std::thread(&RaftNode::persist_loop, this);
+    std::lock_guard<std::mutex> lock(mutex_);
     reset_election_timer();
 }
 
 void RaftNode::stop() {
     election_timer_.cancel();
     heartbeat_timer_.cancel();
+    stop_persistence();
     std::cout << "[Node " << id_ << "] Stopped." << std::endl;
 }
 
@@ -136,10 +203,19 @@ void RaftNode::start_election() {
     state_ = RaftState::Candidate;
     current_term_++;
     voted_for_ = id_;
-    persist_term_and_vote();
+    const uint64_t vote_saved = persist_term_and_vote();
     votes_received_ = 1;
     current_leader_id_ = -1;
+    reset_election_timer();  // if the vote takes too long to reach disk, a later timeout retries
 
+    // Our own vote must be on disk before we ask others for theirs.
+    after_durable(vote_saved, [this, term = current_term_] {
+        if (state_ == RaftState::Candidate && current_term_ == term) request_votes();
+    });
+}
+
+void RaftNode::request_votes() {
+    // This function is called WITH THE MUTEX HELD.
     std::cout << "[Node " << id_ << "] Timed out, starting election for term " << current_term_ << "." << std::endl;
 
     for (size_t i = 0; i < peer_addresses_.size(); ++i) {
@@ -175,7 +251,6 @@ void RaftNode::start_election() {
             }
         });
     }
-    reset_election_timer();
 }
 
 void RaftNode::become_leader() {
@@ -190,7 +265,7 @@ void RaftNode::become_leader() {
     // A leader may only commit entries from earlier terms indirectly, by committing one from its
     // own term (Raft §5.4.2). Append a no-op so they commit now, not on the next client write.
     log_.push_back({current_term_, ""});
-    persist_entries(log_.size() - 1);
+    persist_entries(log_.size() - 1);  // not waited on: the leader writes while it replicates
 
     next_index_.assign(peer_addresses_.size(), log_.size() - 1);
     match_index_.assign(peer_addresses_.size(), 0);
@@ -305,7 +380,7 @@ void RaftNode::advance_commit_index() {
     int old_commit_index = commit_index_;
     for (int N = log_.size() - 1; N > commit_index_; --N) {
         if (log_[N].term == current_term_) {
-            int count = 1;
+            int count = durable_log_end_ >= N ? 1 : 0;  // the leader itself, once N is on its disk
             for (size_t i = 0; i < peer_addresses_.size(); ++i) {
                 if (i != (size_t)id_ && match_index_[i] >= N) {
                     count++;
@@ -323,7 +398,7 @@ void RaftNode::advance_commit_index() {
             last_applied_++;
             const auto& entry = log_[last_applied_];
             if (entry.command.empty()) continue; // leader no-op
-            std::string result = kv_store_.apply_command(entry.command);
+            std::string result = kv_store_.apply_command(entry.command, &aof_buf_);
 
             if (client_callbacks_.count(last_applied_)) {
                 auto callback = client_callbacks_[last_applied_];
@@ -337,19 +412,27 @@ void RaftNode::advance_commit_index() {
     }
 }
 
-void RaftNode::step_down(int new_term) {
-    // This function is called WITH THE MUTEX HELD.
+uint64_t RaftNode::step_down(int new_term) {
+    // This function is called WITH THE MUTEX HELD. Returns the new term's durability sequence.
     state_ = RaftState::Follower;
     current_term_ = new_term;
     voted_for_ = -1;
-    persist_term_and_vote();
+    const uint64_t saved = persist_term_and_vote();
     current_leader_id_ = -1;
     heartbeat_timer_.cancel();
     reset_election_timer();
+    return saved;
 }
 
-std::string RaftNode::handle_rpc(const std::string& request) {
+void RaftNode::handle_rpc(const std::string& request, std::function<void(const std::string&)> reply_fn) {
     std::lock_guard<std::mutex> lock(mutex_);
+    // Raft's rule: persist term, vote and entries before replying, so a reply is sent only once
+    // everything queued for this RPC is on disk.
+    uint64_t must_save = 0;
+    auto send = [this, reply_fn](const std::string& text) {
+        boost::asio::post(io_context_, [reply_fn, text] { reply_fn(text); });
+    };
+    auto reply = [&](const std::string& text) { after_durable(must_save, [send, text] { send(text); }); };
     std::stringstream ss(request);
     std::string rpc_type;
     ss >> rpc_type;
@@ -358,25 +441,25 @@ std::string RaftNode::handle_rpc(const std::string& request) {
         int term, candidate_id, last_log_index, last_log_term;
         ss >> term >> candidate_id >> last_log_index >> last_log_term;
         
-        if (term > current_term_) step_down(term);
-        
+        if (term > current_term_) must_save = step_down(term);
+
         bool log_ok = (last_log_term > log_.back().term) || (last_log_term == log_.back().term && last_log_index >= (int)(log_.size() - 1));
 
         if (term == current_term_ && log_ok && (voted_for_ == -1 || voted_for_ == candidate_id)) {
             voted_for_ = candidate_id;
-            persist_term_and_vote();
+            must_save = persist_term_and_vote();
             reset_election_timer();
-            return "VoteGranted " + std::to_string(current_term_) + "\n";
+            return reply("VoteGranted " + std::to_string(current_term_) + "\n");
         }
-        return "VoteDenied " + std::to_string(current_term_) + "\n";
+        return reply("VoteDenied " + std::to_string(current_term_) + "\n");
     }
 
     if (rpc_type == "AppendEntries") {
         int term, leader_id, prev_log_index, prev_log_term, leader_commit;
         ss >> term >> leader_id >> prev_log_index >> prev_log_term >> leader_commit;
         
-        if (term > current_term_) step_down(term);
-        if (term < current_term_) return "Fail " + std::to_string(current_term_) + "\n";
+        if (term > current_term_) must_save = step_down(term);
+        if (term < current_term_) return reply("Fail " + std::to_string(current_term_) + "\n");
         
         reset_election_timer();
         if (state_ != RaftState::Follower) {
@@ -387,14 +470,14 @@ std::string RaftNode::handle_rpc(const std::string& request) {
 
         if (log_.size() <= (size_t)prev_log_index) {
             // Log too short: the leader should resume right after our last entry.
-            return "Fail " + std::to_string(current_term_) + " " + std::to_string(log_.size()) + "\n";
+            return reply("Fail " + std::to_string(current_term_) + " " + std::to_string(log_.size()) + "\n");
         }
         if (log_[prev_log_index].term != prev_log_term) {
             // Term conflict: skip back past every entry of the conflicting term at once.
             int conflict_term = log_[prev_log_index].term;
             int conflict_index = prev_log_index;
             while (conflict_index > 1 && log_[conflict_index - 1].term == conflict_term) --conflict_index;
-            return "Fail " + std::to_string(current_term_) + " " + std::to_string(conflict_index) + "\n";
+            return reply("Fail " + std::to_string(current_term_) + " " + std::to_string(conflict_index) + "\n");
         }
 
         // Correctly parse multiple log entries, even with spaces in commands.
@@ -432,10 +515,16 @@ std::string RaftNode::handle_rpc(const std::string& request) {
             first_changed = std::min(first_changed, log_.size());
             log_.push_back(entries[i]);
         }
-        persist_entries(first_changed);
-
         // Only entries confirmed by this RPC may be committed; anything beyond may be stale.
         int last_new_index = prev_log_index + (int)entries.size();
+
+        // Success acknowledges every entry up to last_new_index, so those must be on disk first:
+        // new ones are queued now; ones from an earlier RPC may still be in the batch being written.
+        if (first_changed < log_.size()) {
+            must_save = std::max(must_save, persist_entries(first_changed));
+        } else if (durable_log_end_ < last_new_index) {
+            must_save = std::max(must_save, queued_seq_);
+        }
         if (leader_commit > commit_index_) {
             commit_index_ = std::max(commit_index_, std::min(leader_commit, last_new_index));
         }
@@ -444,14 +533,17 @@ std::string RaftNode::handle_rpc(const std::string& request) {
             while (last_applied_ < commit_index_) {
                 last_applied_++;
                 if (log_[last_applied_].command.empty()) continue; // leader no-op
-                kv_store_.apply_command(log_[last_applied_].command);
+                kv_store_.apply_command(log_[last_applied_].command, &aof_buf_);
             }
             persist_applied();
         }
 
-        return "Success " + std::to_string(current_term_) + "\n";
+        // The term is read when the reply is sent: if a newer one arrived meanwhile, the sender
+        // learns of it and steps down instead of counting this as a success.
+        after_durable(must_save, [this, send] { send("Success " + std::to_string(current_term_) + "\n"); });
+        return;
     }
-    return "UnknownRPC\n";
+    send("UnknownRPC\n");
 }
 
 std::string RaftNode::status_json() {
@@ -463,11 +555,12 @@ std::string RaftNode::status_json() {
         << ",\"voted_for\":" << voted_for_ << ",\"leader\":" << current_leader_id_
         << ",\"log\":" << log_.size() - 1 << ",\"last_log_term\":" << log_.back().term
         << ",\"commit\":" << commit_index_ << ",\"applied\":" << last_applied_
+        << ",\"durable\":" << durable_log_end_
         << ",\"keys\":" << kv_store_.size() << ",\"match\":[";
     if (state_ == RaftState::Leader) {
         for (size_t i = 0; i < match_index_.size(); ++i) {
             if (i) out << ",";
-            out << (i == (size_t)id_ ? (int)log_.size() - 1 : match_index_[i]);
+            out << (i == (size_t)id_ ? durable_log_end_ : match_index_[i]);
         }
     }
     out << "]}\n";
@@ -489,7 +582,7 @@ void RaftNode::submit_command(const std::string& command, std::function<void(con
 
     log_.push_back({current_term_, command});
     int new_log_index = log_.size() - 1;
-    persist_entries(new_log_index);
+    persist_entries(new_log_index);  // written in the background; counted once it's on disk
     client_callbacks_[new_log_index] = callback;
 
     // Replicate now rather than waiting for the next heartbeat.
@@ -500,7 +593,6 @@ void RaftNode::submit_command(const std::string& command, std::function<void(con
     }
     if (peer_addresses_.size() == 1) advance_commit_index();
 
-    std::cout << "[Node " << id_ << "] Leader received command: '" << command << "'. Appending at index " << new_log_index << "." << std::endl;
 }
 
 std::shared_ptr<tcp::socket> RaftNode::take_idle_connection(const std::string& peer_address) {
