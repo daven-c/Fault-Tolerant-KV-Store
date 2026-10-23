@@ -16,8 +16,8 @@ This project is a from-scratch implementation of a fault-tolerant, distributed k
 -   **Persistence**: Each node keeps its key/value state in an Append-Only File (AOF) and its Raft term, vote and log in a separate fsync'd state file (`AOFs/node_<id>.raft`), written by one background thread in batches (group commit) so a slow disk never stalls heartbeats or replication. A restarted node keeps its promises (at most one vote per term) and only re-fetches entries it is missing. On macOS `fsync` does not flush the drive's own cache, so this protects against process crashes but not necessarily power loss.
 -   **Concurrent & Asynchronous Networking**: Built on a multi-threaded, event-driven server architecture using Boost.Asio to handle many simultaneous client connections efficiently.
 -   **Modern C++**: Utilizes C++20 features, including concurrency primitives and coroutines for clean, modern asynchronous code.
--   **Low-Latency Replication**: New entries are replicated as soon as they arrive (not on the next heartbeat), batched with one in-flight request per follower over reused TCP connections. Median write latency is about 0.2 ms on a local 3-node cluster.
--   **Fast Follower Recovery**: Followers report where their log diverges, so a restarted node catches up on thousands of entries in about a second.
+-   **Low-Latency Replication**: New entries are replicated as soon as they arrive (not on the next heartbeat), batched with one in-flight request per follower over reused TCP connections. On a local 3-node cluster the median write takes about 0.2 ms, and 64 clients sustain over 26,000 ops/s (p99 4.6 ms).
+-   **Fast Follower Recovery**: Followers report where their log diverges, so a restarted node that missed tens of thousands of writes catches up in under 0.2 s.
 -   **Verified by a Fault-Injection Harness**: A reproducible benchmark suite kills leaders under load and checks durability, replica convergence, and quorum safety on every run (see [Benchmarks](#-benchmarks--fault-injection)).
 
 ---
