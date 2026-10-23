@@ -64,6 +64,30 @@ A local web UI for poking at a real cluster:
 python3 dashboard/server.py        # builds the server and opens http://localhost:8090
 ```
 
+### Running the dashboard
+
+1.  **Requirements**: Python 3.10+ (standard library only, no `pip install`) plus the C++ toolchain
+    from [Prerequisites](#-prerequisites). The dashboard is a single static page served by
+    `dashboard/server.py`; there is no frontend build step.
+2.  **Point it at vcpkg** so it can build the server. It uses the first of: `CMAKE_TOOLCHAIN_FILE`,
+    `$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake`, or the toolchain recorded in an existing
+    `build/CMakeCache.txt` (so if you've already followed [Build Instructions](#️-build-instructions),
+    nothing else is needed):
+    ```bash
+    export VCPKG_ROOT=~/vcpkg
+    ```
+3.  **Start it** from the repository root. The first run compiles a Release build of `server` into
+    `bench/.cache/`; later runs reuse it.
+    ```bash
+    python3 dashboard/server.py                          # 5 nodes, http://localhost:8090
+    python3 dashboard/server.py --nodes 3 --port 9000    # different cluster size / UI port
+    python3 dashboard/server.py --bin build/server       # skip the build, use your own binary
+    python3 dashboard/server.py --no-browser             # don't open a tab (e.g. over SSH)
+    ```
+    Servers listen on ports 20000 and up (`--base-port` to change). Each run uses a fresh temporary
+    directory for AOFs and Raft state, so it never touches `build/AOFs`.
+4.  **Stop it** with Ctrl-C; every node it started is killed and its temporary directory removed.
+
 ![Dashboard: a 5-node cluster map with a leader, followers, one node down, the console and the event log](docs/dashboard.png)
 
 -   **Cluster map**: every node is a dot, coloured and labelled by role (leader, follower, candidate, paused, down), with its term, log length and an applied-entries ring. The leader's link to each follower shows how many entries that follower is behind, and moving dots show entries being replicated and votes being requested, derived from each node's real state.
@@ -270,6 +294,32 @@ intermediate step has its own result file in `bench/results/`.
 
 <sub>* The Python load generator was at ~90% CPU at this level, so this is a lower bound on what the
 server can do.</sub>
+
+### What each change bought
+
+Each row is one commit, measured with the same harness run (3 nodes, 64 clients for throughput,
+5 leader `SIGKILL`s under 32 writers) against the commit before it. Raw results are in
+`bench/results/<label>.json`. Single runs on a laptop vary by roughly ±20–40%, so where a change
+was run twice both runs are shown, and changes that only moved numbers inside that band are marked
+as such.
+
+| # | Change (commit) | Problem it fixed | Measured effect | Result file |
+|---:|---|---|---|---|
+| 0 | Baseline (`bbaeb26`) | | 410 ops/s; 151 ms p50 write; worst failover 5.7 s; restarted node never caught up | `baseline-bbaeb26` |
+| 1 | Don't over-credit followers after `AppendEntries` (`c932b2c`) | Leader counted entries a follower hadn't received, causing replica divergence | Worst failover outage **5,666 → 507 ms (11× lower)**; throughput unchanged | `fix-match-index` |
+| 2 | Replicate immediately + one-step log repair (`3f468ca`) | Every write waited for the next 150 ms heartbeat; followers were repaired one entry per round trip | p50 write **151 → 0.8–1.0 ms (150–190×)**; throughput **410 → 5,580–7,026 ops/s (14–17×)**; catch-up **never (5/5 timeouts) → 0.8–1.0 s** | `improved`, `improved-run2` |
+| 3 | Truncate only on a real conflict (`5cbecd7`, [#2](https://github.com/daven-c/Fault-Tolerant-KV-Store/issues/2)) | A delayed RPC could delete committed entries | New stale-RPC check passes (failed before); performance unchanged (7,188 ops/s) | `fix-log-truncation` |
+| 4 | Persist term, vote and log (`aad0206`, [#1](https://github.com/daven-c/Fault-Tolerant-KV-Store/issues/1)) | A restarted node could vote twice in one term | Double-vote check **FAIL → PASS**; restarted node keeps its log, so catch-up **788 → 445 ms**. Cost: fsync under the lock raised single-client p99 **3.1 → 20.5 ms** (fixed in #9) | `fix-persist-raft-state` |
+| 5 | Pooled RPC connections (`d491a73`) | A new TCP connection per RPC | p50 write **0.6 → 0.3 ms (2×)**; single-client p99 **20.5 → 1.0–1.5 ms**; p99 at 64 clients **31.4 → 12–20 ms**; throughput 9,202–13,276 ops/s | `persistent-conns`, `persistent-conns-run2` |
+| 6 | Leader no-op entry on election (`dda9e88`) | New leader couldn't commit earlier-term entries until the next write | New idle-leader-change check passes (acked writes applied on every survivor within 5 s); p99 at 64 clients 8.7 ms | `fix-leader-noop` |
+| 7 | Cap `AppendEntries` at 2,048 entries (`b1178c5`) | Unbounded RPCs when a follower was far behind | Bounded message size; single-client p99 **0.6 → 0.3 ms**, other numbers within noise | `append-batch-cap` |
+| 8 | Ignore stale election-timer firings (`cc781eb`) | A timer that fired while the node was busy started an election right after a heartbeat | Worst failover outage **1,468 → 388 ms** in that run | `election-timer-fix` |
+| 9 | Ignore vote replies from earlier elections (`33d9b1d`) | A late "yes" could make a node leader without a majority (two leaders at once) | New stale-vote check: old code became leader of term 2 from a term-1 vote; fixed code stays candidate | `group-commit` (check) |
+| 10 | Group commit off the Raft lock (`a738218`, [#4](https://github.com/daven-c/Fault-Tolerant-KV-Store/issues/4)) | Every fsync and AOF write held the main lock, freezing heartbeats | Throughput **12,207 → 26,730–28,273 ops/s (2.2–2.3×)**; p99 at 64 clients **17.3 → 4.4–4.6 ms (3.8×)**; catch-up **565 → 178 ms (3.2×)**; elections under steady load **0–7 → 0 per 40 s run** (6 runs) | `group-commit`, `group-commit-run2` |
+
+End to end (baseline → #10): **65× throughput, ~720× lower median write latency, 6.6× lower worst
+failover outage, 0 acknowledged writes lost** throughout. Each correctness check passes from the
+commit that fixed its bug onward.
 
 ### Correctness checks (all passing)
 
